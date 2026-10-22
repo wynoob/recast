@@ -3,6 +3,11 @@ import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { ApiSuccessSchema, ContentDetailSchema, RevisionViewSchema, type AuthoringOperation, type RevisionView } from "@dmall/contracts";
 import { startT02cApp, type T02cTestApp } from "./t02c-test-helpers.js";
+import {
+  createInternalContent,
+  restoreInternalRevision,
+  saveInternalRevision,
+} from "./internal-authoring-helpers.js";
 
 const apps: T02cTestApp[] = [];
 afterEach(async () => {
@@ -14,12 +19,12 @@ afterEach(async () => {
 
 async function editor(kind: "feishu_doc" | "html_deck" = "feishu_doc") {
   const app = await startT02cApp(); apps.push(app);
-  const created = await app.rawJson("POST", "/api/v1/contents", { schemaVersion: 1, title: "修复回归", kind });
+  const created = createInternalContent(app, { schemaVersion: 1, title: "修复回归", kind });
   expect(created.status).toBe(201);
   const content = ApiSuccessSchema(ContentDetailSchema).parse(created.body).data;
   const rendition = content.renditions[0]; if (rendition === undefined) throw new Error("missing rendition");
   let currentId = rendition.currentRevisionId;
-  const post = (operations: AuthoringOperation[], key = randomUUID()) => app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+  const post = (operations: AuthoringOperation[], key = randomUUID()) => saveInternalRevision(app, rendition.id, {
     schemaVersion: 1, baseRevisionId: currentId, operations, claims: [], evidenceSelections: [],
   }, key);
   const save = async (operations: AuthoringOperation[]) => {
@@ -28,7 +33,7 @@ async function editor(kind: "feishu_doc" | "html_deck" = "feishu_doc") {
     const view = ApiSuccessSchema(RevisionViewSchema).parse(response.body).data;
     currentId = view.id; return view;
   };
-  const restore = (historyId: string) => app.rawJson("POST", `/api/v1/renditions/${rendition.id}/restore`, {
+  const restore = (historyId: string) => restoreInternalRevision(app, rendition.id, {
     schemaVersion: 1, historicalRevisionId: historyId, expectedRevisionId: currentId,
   });
   return { app, rendition, save, post, restore, current: () => currentId };

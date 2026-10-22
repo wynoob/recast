@@ -8,6 +8,10 @@ import {
   RevisionViewSchema,
 } from "@dmall/contracts";
 import { startT02cApp, type T02cTestApp } from "./t02c-test-helpers.js";
+import {
+  createInternalContent,
+  saveInternalRevision,
+} from "./internal-authoring-helpers.js";
 
 const apps: T02cTestApp[] = [];
 
@@ -27,7 +31,7 @@ describe("parent historical binding regression", () => {
     const fixture = seedMediaFixture(app);
     const sectionId = randomUUID();
     const blockId = randomUUID();
-    const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+    const response = await saveInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       baseRevisionId: rendition.currentRevisionId,
       operations: [{
@@ -114,7 +118,7 @@ function requireRendition(content: ContentResponse): NonNullable<ContentResponse
 }
 
 async function createContent(app: T02cTestApp, title: string): Promise<ContentResponse> {
-  const response = await app.rawJson("POST", "/api/v1/contents", {
+  const response = createInternalContent(app, {
     schemaVersion: 1,
     title,
     kind: "feishu_doc",
@@ -128,7 +132,7 @@ async function saveTitle(
   rendition: ReturnType<typeof requireRendition>,
   title: string,
 ) {
-  const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+  const response = await saveInternalRevision(app, rendition.id, {
     schemaVersion: 1,
     baseRevisionId: rendition.currentRevisionId,
     operations: [{

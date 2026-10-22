@@ -3,6 +3,11 @@ import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { ApiSuccessSchema, ContentDetailSchema, RevisionViewSchema, type AuthoringOperation } from "@dmall/contracts";
 import { startT02cApp, type T02cTestApp } from "./t02c-test-helpers.js";
+import {
+  createInternalContent,
+  restoreInternalRevision,
+  saveInternalRevision,
+} from "./internal-authoring-helpers.js";
 
 const apps: T02cTestApp[] = [];
 afterEach(async () => {
@@ -15,17 +20,17 @@ afterEach(async () => {
 });
 async function editor() {
   const app = await startT02cApp(); apps.push(app);
-  const result = await app.rawJson("POST", "/api/v1/contents", {schemaVersion:1,title:"独立反例",kind:"feishu_doc"});
+  const result = createInternalContent(app, {schemaVersion:1,title:"独立反例",kind:"feishu_doc"});
   expect(result.status).toBe(201);
   const rendition = ApiSuccessSchema(ContentDetailSchema).parse(result.body).data.renditions[0];
   if (!rendition) throw new Error("missing rendition");
   let current = rendition.currentRevisionId;
-  const post = (operations: AuthoringOperation[],key = randomUUID()) => app.rawJson("POST",`/api/v1/renditions/${rendition.id}/revisions`,{schemaVersion:1,baseRevisionId:current,operations,claims:[],evidenceSelections:[]},key);
+  const post = (operations: AuthoringOperation[],key = randomUUID()) => saveInternalRevision(app,rendition.id,{schemaVersion:1,baseRevisionId:current,operations,claims:[],evidenceSelections:[]},key);
   const save = async (operations: AuthoringOperation[]) => {
     const response = await post(operations);expect(response.status,JSON.stringify(response.body)).toBe(201);
     const view=ApiSuccessSchema(RevisionViewSchema).parse(response.body).data;current=view.id;return view;
   };
-  const restore = (historicalRevisionId:string) => app.rawJson("POST",`/api/v1/renditions/${rendition.id}/restore`,{schemaVersion:1,historicalRevisionId,expectedRevisionId:current});
+  const restore = (historicalRevisionId:string) => restoreInternalRevision(app,rendition.id,{schemaVersion:1,historicalRevisionId,expectedRevisionId:current});
   const snapshot = () => {
     const db=app.context.database.db;
     return {

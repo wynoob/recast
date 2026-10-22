@@ -12,6 +12,10 @@ import {
   makePdf,
   S08_PATH,
 } from "../../packages/local-adapters/tests/fixtures.js";
+import {
+  createInternalContent,
+  selectInternalEvidence,
+} from "./internal-authoring-helpers.js";
 
 interface TestClient {
   context: AppContext;
@@ -257,14 +261,14 @@ describe("T03/T04 local document business chain", () => {
 
     const headingOnly = await searchQuery("只有标题");
     expect(headingOnly.hits[0]?.blockIds).toEqual([]);
-    const content = await client.write("/api/v1/contents", {
+    const content = createInternalContent(client, {
       schemaVersion: 1,
       title: "检索固定素材",
       kind: "feishu_doc",
     });
     expect(content.status).toBe(201);
     const contentId = dataOf<{ id: string }>(content.body).id;
-    const headingPinned = await client.write(`/api/v1/contents/${contentId}/evidence/select`, {
+    const headingPinned = selectInternalEvidence(client, contentId, {
       schemaVersion: 1,
       selectionHandles: [headingOnly.hits[0]?.selectionHandle],
     });
@@ -305,7 +309,7 @@ describe("T03/T04 local document business chain", () => {
     expect(patched.status).toBe(200);
     const refreshed = await searchQuery("人工标题即时检索");
     expect(refreshed.hits.some((hit) => hit.refType === "source_version")).toBe(true);
-    const mediaPinned = await client.write(`/api/v1/contents/${contentId}/evidence/select`, {
+    const mediaPinned = selectInternalEvidence(client, contentId, {
       schemaVersion: 1,
       selectionHandles: [refreshed.hits[0]?.selectionHandle],
     });

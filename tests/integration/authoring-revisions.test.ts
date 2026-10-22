@@ -8,6 +8,11 @@ import {
   RevisionViewSchema,
 } from "@dmall/contracts";
 import { startT02cApp, type T02cTestApp } from "./t02c-test-helpers.js";
+import {
+  createInternalContent,
+  restoreInternalRevision,
+  saveInternalRevision,
+} from "./internal-authoring-helpers.js";
 
 const apps: T02cTestApp[] = [];
 
@@ -60,20 +65,20 @@ describe("T06 local manual revisions", () => {
       evidenceSelections: [],
     };
     const key = randomUUID();
-    const first = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, body, key);
+    const first = await saveInternalRevision(app, rendition.id, body, key);
     expect(first.status).toBe(201);
     const saved = jsonData(first.body, RevisionViewSchema);
     expect(saved.parentId).toBe(rendition.currentRevisionId);
     if (saved.ast.kind !== "feishu_doc") throw new Error("doc expected");
     expect(saved.ast.sections[0]?.id).toBe(sectionId);
 
-    const replay = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, body, key);
+    const replay = await saveInternalRevision(app, rendition.id, body, key);
     expect(replay.status).toBe(201);
     expect(replay.body).toEqual(first.body);
 
-    const different = await app.rawJson(
-      "POST",
-      `/api/v1/renditions/${rendition.id}/revisions`,
+    const different = await saveInternalRevision(
+      app,
+      rendition.id,
       {
         ...body,
         operations: [{ op: "setField", nodeId: rendition.rootNodeId, path: "title", value: "不同请求" }],
@@ -113,8 +118,8 @@ describe("T06 local manual revisions", () => {
       evidenceSelections: [],
     });
     const [left, right] = await Promise.all([
-      app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, operation("左"), randomUUID()),
-      app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, operation("右"), randomUUID()),
+      saveInternalRevision(app, rendition.id, operation("左"), randomUUID()),
+      saveInternalRevision(app, rendition.id, operation("右"), randomUUID()),
     ]);
     expect([left.status, right.status].sort()).toEqual([201, 409]);
     const failed = left.status === 409 ? left : right;
@@ -136,7 +141,7 @@ describe("T06 local manual revisions", () => {
 
     const secondContent = await createContent(app, "另一个稿件");
     const secondRendition = requireRendition(secondContent);
-    const wrong = await app.rawJson("POST", `/api/v1/renditions/${secondRendition.id}/restore`, {
+    const wrong = await restoreInternalRevision(app, secondRendition.id, {
       schemaVersion: 1,
       historicalRevisionId: firstRevisionId,
       expectedRevisionId: secondRendition.currentRevisionId,
@@ -145,7 +150,7 @@ describe("T06 local manual revisions", () => {
     expect(errorCode(wrong.body)).toBe("VALIDATION_ERROR");
     expect(count(app, "revisions", "rendition_id", secondRendition.id)).toBe(1);
 
-    const restored = await app.rawJson("POST", `/api/v1/renditions/${firstRendition.id}/restore`, {
+    const restored = await restoreInternalRevision(app, firstRendition.id, {
       schemaVersion: 1,
       historicalRevisionId: firstRevisionId,
       expectedRevisionId: saved.id,
@@ -185,7 +190,7 @@ describe("T06 local manual revisions", () => {
       }),
       now,
     );
-    const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/restore`, {
+    const response = await restoreInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       historicalRevisionId: historicalId,
       expectedRevisionId: rendition.currentRevisionId,
@@ -234,7 +239,7 @@ describe("T06 local manual revisions", () => {
       now,
     );
     const before = count(app, "revisions", "rendition_id", rendition.id);
-    const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/restore`, {
+    const response = await restoreInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       historicalRevisionId: historicalId,
       expectedRevisionId: rendition.currentRevisionId,
@@ -250,7 +255,7 @@ describe("T06 local manual revisions", () => {
     const rendition = requireRendition(created);
     const firstRevisionId = rendition.currentRevisionId;
     const sectionId = randomUUID();
-    const inserted = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+    const inserted = await saveInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       baseRevisionId: firstRevisionId,
       operations: [{
@@ -264,7 +269,7 @@ describe("T06 local manual revisions", () => {
     });
     expect(inserted.status).toBe(201);
     const insertedView = jsonData(inserted.body, RevisionViewSchema);
-    const locked = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+    const locked = await saveInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       baseRevisionId: insertedView.id,
       operations: [{
@@ -278,7 +283,7 @@ describe("T06 local manual revisions", () => {
     });
     expect(locked.status).toBe(201);
     const lockedView = jsonData(locked.body, RevisionViewSchema);
-    const rejected = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/restore`, {
+    const rejected = await restoreInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       historicalRevisionId: firstRevisionId,
       expectedRevisionId: lockedView.id,
@@ -293,7 +298,7 @@ describe("T06 local manual revisions", () => {
     const created = await createContent(app, "非法引用");
     const rendition = requireRendition(created);
     const before = count(app, "revisions", "rendition_id", rendition.id);
-    const claim = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+    const claim = await saveInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       baseRevisionId: rendition.currentRevisionId,
       operations: [],
@@ -307,7 +312,7 @@ describe("T06 local manual revisions", () => {
     expect(claim.status).toBe(422);
     expect(errorCode(claim.body)).toBe("UNKNOWN_REFERENCE");
 
-    const image = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+    const image = await saveInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       baseRevisionId: rendition.currentRevisionId,
       operations: [{
@@ -347,7 +352,7 @@ describe("T06 local manual revisions", () => {
     const fixture = seedMediaFixture(app);
     const sectionId = randomUUID();
     const blockId = randomUUID();
-    const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+    const response = await saveInternalRevision(app, rendition.id, {
       schemaVersion: 1,
       baseRevisionId: rendition.currentRevisionId,
       operations: [{
@@ -410,7 +415,7 @@ describe("T06 local manual revisions", () => {
     const pageCount = Number(app.context.database.db.pragma("page_count", { simple: true }));
     app.context.database.db.pragma(`max_page_count = ${pageCount}`);
     try {
-      const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+      const response = await saveInternalRevision(app, rendition.id, {
         schemaVersion: 1,
         baseRevisionId: rendition.currentRevisionId,
         operations: [{
@@ -474,7 +479,7 @@ function requireRendition(content: ContentResponse): NonNullable<ContentResponse
 }
 
 async function createContent(app: T02cTestApp, title: string): Promise<ContentResponse> {
-  const response = await app.rawJson("POST", "/api/v1/contents", {
+  const response = createInternalContent(app, {
     schemaVersion: 1,
     title,
     kind: "feishu_doc",
@@ -488,7 +493,7 @@ async function saveTitle(
   rendition: ReturnType<typeof requireRendition>,
   title: string,
 ) {
-  const response = await app.rawJson("POST", `/api/v1/renditions/${rendition.id}/revisions`, {
+  const response = saveInternalRevision(app, rendition.id, {
     schemaVersion: 1,
     baseRevisionId: rendition.currentRevisionId,
     operations: [{
