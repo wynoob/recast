@@ -153,7 +153,14 @@ export class CandidateAcceptService {
         if (item.kind === "fact") return [item.entity.factVersionId, ...item.entity.sourceVersionIds];
         if (item.kind === "source") return [item.sourceVersionId];
         if (item.kind === "media") {
-          return [item.assetVersionId, item.derivative?.id ?? "", item.segment?.id ?? "", item.poster?.id ?? ""].filter((id) => id !== "");
+          return [
+            item.assetVersionId,
+            item.occurrence?.requestedOccurrenceId ?? "",
+            item.occurrence?.sourceVersionId ?? "",
+            item.derivative?.id ?? "",
+            item.segment?.id ?? "",
+            item.poster?.id ?? "",
+          ].filter((id) => id !== "");
         }
         return [item.messageId];
       }));

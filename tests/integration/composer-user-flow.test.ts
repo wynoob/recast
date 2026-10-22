@@ -9,6 +9,7 @@ import { chromium, type Browser, type BrowserContext, type Locator } from "@play
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { unzipFiles } from "@dmall/renderers";
+import { AstSchema } from "@dmall/contracts";
 import { createApp, type AppContext } from "../../apps/server/src/app.js";
 import type { RuntimeConfig } from "../../apps/server/src/config.js";
 import {
@@ -198,9 +199,10 @@ function assertDurableResult(app: { context: AppContext }, provider: UserFlowPro
 
   const revision = z.strictObject({ ast_json: z.string() }).parse(
     db.prepare("SELECT ast_json FROM revisions WHERE created_by = 'ai_accepted'").get());
-  const ast = z.strictObject({
-    slides: z.array(z.strictObject({ title: z.string(), blocks: z.array(z.strictObject({ type: z.string() })).min(1) })).length(2),
-  }).parse(JSON.parse(revision.ast_json));
+  const ast = AstSchema.parse(JSON.parse(revision.ast_json));
+  if (ast.kind !== "html_deck") throw new Error("已接受修订不是演示文稿");
+  expect(ast.slides).toHaveLength(2);
+  expect(ast.slides.every((slide) => slide.blocks.length > 0)).toBe(true);
   expect(ast.slides.map((slide) => slide.title)).toEqual(["库存三步核对", "今日执行"]);
   expect(ast.slides.flatMap((slide) => slide.blocks).map((block) => block.type)).toEqual(["paragraph", "image", "list"]);
   expect(revision.ast_json).toContain(USER_FLOW_PARAGRAPH);
