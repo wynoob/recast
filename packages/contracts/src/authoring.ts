@@ -377,6 +377,7 @@ export const GenerationInputViewSchema = z.strictObject({
   providerConfigVersion: z.string(),
   promptVersion: z.string(),
   schemaVersion: z.literal(1),
+  compositionSnapshotHash: HashSchema.nullable().default(null),
   inputHash: HashStringSchema,
   createdAt: UtcTimeSchema,
 });

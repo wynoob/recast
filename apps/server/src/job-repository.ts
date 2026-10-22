@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import {
   JobCheckpointSchema,
+  WorkerFinishedSchema,
   JobErrorSchema,
   JobEventPayloadSchema,
   JobEventSchema,
@@ -32,6 +33,7 @@ const JobRowSchema = z.strictObject({
   input_hash: z.string(),
   input_json: z.string(),
   idempotency_key: z.string().nullable(),
+  business_key: z.string().nullable(),
   state: JobStateSchema,
   phase: z.string(),
   attempt: z.int().nonnegative(),
@@ -94,12 +96,23 @@ export class JobRepository {
     input: JobInput;
     inputHash: string;
     idempotencyKey: string | null;
+    businessKey?: string;
   }): JobSnapshot {
+    if (input.businessKey !== undefined) {
+      const existing = this.findBusinessKey(input.businessKey);
+      if (existing !== null) {
+        if (existing.inputHash !== input.inputHash || existing.snapshot.type !== input.type || (input.id !== undefined && existing.snapshot.id !== input.id)) {
+          throw new ApiError({ statusCode: 409, code: "IDEMPOTENCY_CONFLICT", message: "任务业务身份对应不同输入" });
+        }
+        return existing.snapshot;
+      }
+    }
+    JobInputSchema.parse(input.input);
     const id = input.id ?? randomUUID();
     const now = new Date().toISOString();
     const recoveryPolicy =
       input.type === "authoring_provider" || input.type === "authoring_transcription"
-        || input.type === "authoring_probe"
+        || input.type === "authoring_probe" || input.type === "composition_provider"
         ? "provider_fenced"
         : "local";
     this.db
@@ -107,8 +120,8 @@ export class JobRepository {
         `INSERT INTO jobs
           (id, type, input_hash, input_json, idempotency_key, state, phase, attempt, max_attempts,
            checkpoint_json, result_json, error_json, lease_owner, lease_generation, lease_until,
-           next_run_at, cancel_requested, created_at, updated_at, recovery_policy)
-         VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, NULL, NULL, NULL, NULL, 0, NULL, NULL, 0, ?, ?, ?)`,
+           next_run_at, cancel_requested, created_at, updated_at, recovery_policy, business_key)
+         VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, NULL, NULL, NULL, NULL, 0, NULL, NULL, 0, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -120,6 +133,7 @@ export class JobRepository {
         now,
         now,
         recoveryPolicy,
+        input.businessKey ?? null,
       );
     this.addEventInternal({
       jobId: id,
@@ -130,6 +144,57 @@ export class JobRepository {
       payload: { kind: "progress", message: "任务已排队" },
     });
     return this.snapshotById(id);
+  }
+
+  saveOutputCompletion(message: z.infer<typeof WorkerFinishedSchema>): void {
+    if (message.result?.jobType !== "export_output" || !this.isFenceValid(message.fence)) return;
+    const row = this.get(message.fence.jobId);
+    if (row === null || row.input.jobType !== "export_output" || row.input.exportId !== message.result.exportId) {
+      throw new ApiError({ statusCode: 409, code: "DELIVERY_IDENTITY_CONFLICT", message: "输出完成消息不属于原任务" });
+    }
+    const key = `output:completion:${message.fence.attempt}:${message.fence.leaseGeneration}`;
+    this.db.prepare("INSERT INTO worker_receipts(job_id, receipt_key, input_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id, receipt_key) DO NOTHING")
+      .run(message.fence.jobId, key, row.inputHash, JSON.stringify(message), new Date().toISOString());
+  }
+
+  pendingOutputCompletions(limit: number): z.infer<typeof WorkerFinishedSchema>[] {
+    const rows = z.array(z.object({ result_json: z.string() })).parse(this.db.prepare(`SELECT r.result_json FROM worker_receipts r JOIN jobs j ON j.id = r.job_id
+      WHERE j.type = 'export_output' AND j.state = 'queued' AND j.cancel_requested = 0 AND r.input_hash = j.input_hash
+        AND r.receipt_key = 'output:completion:' || j.attempt || ':' || j.lease_generation
+      ORDER BY j.updated_at LIMIT ?`).all(limit));
+    return rows.map((row) => WorkerFinishedSchema.parse(JSON.parse(row.result_json)));
+  }
+
+  finishRecoveredOutput(message: z.infer<typeof WorkerFinishedSchema>, preparationError?: string): JobEvent | null {
+    return this.db.transaction(() => {
+      const row = this.get(message.fence.jobId);
+      if (row === null || row.snapshot.state !== "queued" || row.snapshot.cancelRequested || row.snapshot.attempt !== message.fence.attempt || row.snapshot.leaseGeneration !== message.fence.leaseGeneration) return null;
+      if (message.result?.jobType !== "export_output" || (message.state !== "succeeded" && message.state !== "partial")) return null;
+      const final = this.applyLocalFinalizers(message.fence.jobId, preparationError === undefined ? message.state : "failed", message.result);
+      const error = preparationError === undefined ? message.error : { code: "INTERNAL_ERROR", message: preparationError, retryable: true };
+      this.db.prepare("UPDATE jobs SET state = ?, phase = 'done', result_json = ?, error_json = ?, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ?")
+        .run(final.state, JSON.stringify(final.result), error === null ? null : JSON.stringify(error), new Date().toISOString(), message.fence.jobId);
+      return this.addEventInternal({ jobId: message.fence.jobId, kind: final.state === "failed" ? "error" : "completed", phase: "done", done: null, total: null,
+        payload: final.state === "failed" ? { kind: "error", code: "INTERNAL_ERROR", message: preparationError ?? "输出登记失败", retryable: true }
+          : { kind: "completed", state: final.state === "succeeded" ? "succeeded" : "partial", message: "已核对原输出文件并恢复登记" } });
+    })();
+  }
+
+  findBusinessKey(key: string): JobRow | null {
+    const row = this.db.prepare("SELECT * FROM jobs WHERE business_key = ?").get(key);
+    return row === undefined ? null : this.parseRow(row);
+  }
+
+  completeRecovered(id: string, result: JobResult): JobEvent | null {
+    return this.db.transaction(() => {
+      const row = this.get(id);
+      if (row === null || row.input.jobType !== "composition_provider" || row.snapshot.cancelRequested || row.snapshot.state === "cancelled" || row.snapshot.state === "succeeded") return null;
+      if (row.snapshot.state === "running") return null;
+      const parsed = JobResultSchema.parse(result);
+      this.db.prepare("UPDATE jobs SET state = 'succeeded', phase = 'done', result_json = ?, error_json = NULL, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(parsed), new Date().toISOString(), id);
+      return this.addEventInternal({ jobId: id, kind: "completed", phase: "done", done: null, total: null, payload: { kind: "completed", state: "succeeded", message: "已恢复保存的模型响应" } });
+    })();
   }
 
   get(id: string): JobRow | null {
@@ -206,6 +271,10 @@ export class JobRepository {
           });
         }
       }
+      if (row.input.jobType === "export_output" && !snapshot.cancelRequested && this.db.prepare("SELECT 1 FROM worker_receipts WHERE job_id = ? AND receipt_key = ? AND input_hash = ?").get(id, `output:completion:${snapshot.attempt}:${snapshot.leaseGeneration}`, row.inputHash) !== undefined) {
+        this.db.prepare("UPDATE jobs SET state = 'queued', phase = 'output_recovery', lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+        return null;
+      }
       const requestedState = snapshot.cancelRequested ? "cancelled" : snapshot.attempt >= snapshot.maxAttempts ? "failed" : "queued";
       const finalized = this.applyLocalFinalizers(id, requestedState, snapshot.result);
       const {state, result} = finalized;
@@ -263,6 +332,10 @@ export class JobRepository {
           message: "任务正在执行或已取消，不能重试",
         });
       }
+      if (row.input.jobType === "composition_provider" || row.input.jobType === "feishu_publish" ||
+          (row.input.jobType === "export_output" && this.db.prepare("SELECT id FROM exports WHERE id = ? AND business_key IS NOT NULL").get(row.input.exportId) !== undefined)) {
+        throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "该任务必须通过原创作交付决策恢复" });
+      }
       const policy = z.strictObject({ recovery_policy: z.enum(["local", "provider_fenced"]) }).parse(
         this.db.prepare("SELECT recovery_policy FROM jobs WHERE id = ?").get(id),
       ).recovery_policy;
@@ -274,7 +347,7 @@ export class JobRepository {
              checkpoint_json = CASE WHEN ? = 'provider_fenced' THEN checkpoint_json ELSE NULL END,
              updated_at = ? WHERE id = ?`,
         )
-        .run(new Date().toISOString(), policy, id);
+        .run(policy, new Date().toISOString(), id);
       this.addEventInternal({
         jobId: id,
         kind: "progress",
@@ -283,6 +356,23 @@ export class JobRepository {
         total: null,
         payload: { kind: "progress", message: "任务已准备重试" },
       });
+      return this.snapshotById(id);
+    })();
+  }
+
+  resumeOutput(id: string): JobSnapshot {
+    return this.db.transaction(() => {
+      const row = this.get(id);
+      if (row === null) throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "输出任务不存在" });
+      if ((row.input.jobType !== "feishu_publish" && row.input.jobType !== "export_output") ||
+          !["failed", "partial"].includes(row.snapshot.state) || row.snapshot.cancelRequested) {
+        throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "只有失败或部分完成的原输出任务可以恢复" });
+      }
+      this.db.prepare(`UPDATE jobs SET state = 'queued', phase = 'resumed',
+        max_attempts = CASE WHEN attempt >= max_attempts THEN attempt + 1 ELSE max_attempts END,
+        lease_owner = NULL, lease_until = NULL, error_json = NULL, result_json = NULL, updated_at = ? WHERE id = ?`)
+        .run(new Date().toISOString(), id);
+      this.addEventInternal({ jobId: id, kind: "progress", phase: "resumed", done: null, total: null, payload: { kind: "progress", message: "保留原输出进度继续交付" } });
       return this.snapshotById(id);
     })();
   }
@@ -296,7 +386,7 @@ export class JobRepository {
       const policy = z.strictObject({ recovery_policy: z.enum(["local", "provider_fenced"]) }).parse(
         this.db.prepare("SELECT recovery_policy FROM jobs WHERE id = ?").get(id),
       ).recovery_policy;
-      if (policy !== "provider_fenced" || row.snapshot.state !== "waiting_input") {
+      if (row.input.jobType === "composition_provider" || policy !== "provider_fenced" || row.snapshot.state !== "waiting_input") {
         throw new ApiError({
           statusCode: 409,
           code: "JOB_NOT_RESUMABLE",
@@ -590,7 +680,7 @@ export class JobRepository {
       }
       const now = new Date().toISOString();
       this.db
-        .prepare("UPDATE jobs SET state = 'queued', phase = 'resumed', updated_at = ? WHERE id = ?")
+        .prepare("UPDATE jobs SET state = 'queued', phase = 'resumed', max_attempts = CASE WHEN attempt >= max_attempts THEN attempt + 1 ELSE max_attempts END, updated_at = ? WHERE id = ?")
         .run(now, id);
       const event = this.addEventInternal({
         jobId: id,

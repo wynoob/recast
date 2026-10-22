@@ -1,3 +1,4 @@
+import { CompositionTaskSchema, CompositionResponseSchema } from "./composition.js";
 import { z } from "zod";
 import { ErrorCodeSchema } from "./api.js";
 import {
@@ -62,6 +63,7 @@ export const JobTypeSchema = z.enum([
   "feishu_publish",
   "feishu_pull",
   "authoring_provider",
+  "composition_provider",
   "authoring_transcription",
   "authoring_probe",
 ]);
@@ -176,6 +178,37 @@ export const JobInputSchema = z.union([
     expectedLocalRevisionId: UuidSchema,
     remoteDocumentId: z.string().min(1),
     remoteUrl: z.string().url(),
+  }),
+  z.strictObject({
+    schemaVersion: SchemaVersionSchema,
+    jobType: z.literal("composition_provider"),
+    contentId: UuidSchema,
+    renditionId: UuidSchema,
+    inputId: UuidSchema.nullable(),
+    contentVersion: z.int().nonnegative(),
+    task: CompositionTaskSchema,
+    provider: z.strictObject({
+      role: z.literal("text"),
+      providerId: z.string().min(1),
+      baseUrl: z.string().url(),
+      modelId: z.string().min(1),
+      credentialEnv: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+      timeoutMs: z.int().min(1_000).max(300_000),
+    }),
+    requestEnvelope: z.strictObject({
+      role: z.literal("text"),
+      providerId: z.string().min(1),
+      modelId: z.string().min(1),
+      providerConfigVersion: z.string().min(1),
+      promptVersion: z.string().min(1),
+      responseSchemaId: z.enum(["composition_intent/1", "composition_recommend/1", "composition_doc/1", "composition_deck/1"]),
+      messages: z.array(z.strictObject({
+        role: z.enum(["system", "user"]),
+        content: z.string(),
+      })).min(1),
+      toolsDisabled: z.literal(true),
+      timeoutMs: z.int().positive(),
+    }),
   }),
   z.strictObject({
     schemaVersion: SchemaVersionSchema,
@@ -373,6 +406,18 @@ export const JobResultSchema = z.discriminatedUnion("jobType", [
   BundleImportJobResultSchema,
   FeishuPublishResultSchema,
   FeishuPullJobResultSchema,
+  z.strictObject({
+    schemaVersion: SchemaVersionSchema,
+    jobType: z.literal("composition_provider"),
+    contentId: UuidSchema,
+    renditionId: UuidSchema,
+    inputId: UuidSchema.nullable(),
+    response: CompositionResponseSchema,
+    rawResponse: z.string(),
+    responseHash: z.string().regex(/^resp1:[a-f0-9]{64}$/),
+    providerRequestId: z.string().nullable(),
+    cost: z.number().finite().nonnegative().nullable(),
+  }),
   z.strictObject({
     schemaVersion: SchemaVersionSchema,
     jobType: z.literal("authoring_provider"),

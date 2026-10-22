@@ -31,6 +31,7 @@ import {
   acceptProviderMessage,
   callAsrModel,
   callTextModel,
+  callCompositionModel,
   probeTextModel,
 } from "./authoring/provider-client.js";
 
@@ -164,6 +165,8 @@ async function runGrant(grant: JobGrant): Promise<void> {
     } else if (grant.input.jobType === "feishu_pull") {
       const result = await runFeishuPullJob(grant, outputDeps(grant));
       finishSucceeded(grant.fence, result);
+    } else if (grant.input.jobType === "composition_provider") {
+      await runCompositionProvider(grant, controller.signal);
     } else if (grant.input.jobType === "authoring_provider") {
       await runAuthoringProvider(grant, controller.signal);
     } else if (grant.input.jobType === "authoring_transcription") {
@@ -425,6 +428,18 @@ async function runTemplateValidationGrant(grant: JobGrant, signal: AbortSignal):
           retryable: false,
         },
   });
+}
+
+async function runCompositionProvider(grant: JobGrant, signal: AbortSignal): Promise<void> {
+  if (grant.input.jobType !== "composition_provider") return;
+  const input = grant.input;
+  sendEvent(grant.fence, "progress", input.task, null, null, { kind: "progress", message: input.task === "intent" ? "正在理解创作要求" : input.task === "recommend" ? "正在从真实候选推荐方案" : "正在撰写确认方案的全文" });
+  const response = await callCompositionModel({ fence: grant.fence, task: input.task,
+    purpose: input.task === "intent" || input.task === "recommend" ? "planning" : "generation",
+    callOrdinal: 0, provider: input.provider, envelope: input.requestEnvelope, signal });
+  finishSucceeded(grant.fence, { schemaVersion: 1, jobType: "composition_provider", contentId: input.contentId,
+    renditionId: input.renditionId, inputId: input.inputId, response: response.parsed, rawResponse: response.rawResponse,
+    responseHash: response.responseHash, providerRequestId: response.providerRequestId, cost: response.cost });
 }
 
 async function runAuthoringProvider(grant: JobGrant, signal: AbortSignal): Promise<void> {

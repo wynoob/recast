@@ -5,6 +5,7 @@ import {
   type ErrorCode,
   type JobEvent,
   type JobGrant,
+  type JobResult,
   type JobSnapshot,
   type WorkerToHostMessage,
 } from "@dmall/contracts";
@@ -24,9 +25,13 @@ export class JobScheduler {
   private readonly remoteOps: RemoteOperationRepository | null;
   private readonly prepareOutputGrant: ((grant: JobGrant) => Promise<JobGrant>) | null;
   private readonly providerJournal: ProviderJournal | null;
+  private readonly prepareCompletion: ((jobId: string, result: JobResult | null) => Promise<void>) | null;
+  private readonly advanceCompositions: (() => Promise<void>) | null;
   private timer: NodeJS.Timeout | null = null;
   private maintenance: Promise<void> | null = null;
   private closing = false;
+  private lastCompositionSweep = 0;
+  private compositionChanged = true;
 
   constructor(input: {
     jobs: JobRepository;
@@ -37,7 +42,11 @@ export class JobScheduler {
     remoteOps?: RemoteOperationRepository;
     prepareOutputGrant?: (grant: JobGrant) => Promise<JobGrant>;
     providerJournal?: ProviderJournal;
+    prepareCompletion?: (jobId: string, result: JobResult | null) => Promise<void>;
+    advanceCompositions?: () => Promise<void>;
   }) {
+    this.prepareCompletion = input.prepareCompletion ?? null;
+    this.advanceCompositions = input.advanceCompositions ?? null;
     this.jobs = input.jobs;
     this.pool = input.pool;
     this.events = input.events;
@@ -52,6 +61,7 @@ export class JobScheduler {
     for (const event of this.jobs.recoverInterrupted()) this.publish(event);
     this.pool.setMessageHandler((message) => this.handleWorkerMessage(message));
     this.pool.setWorkerExitHandler((jobId) => {
+      this.compositionChanged = true;
       const event = this.jobs.requeueAfterWorkerExit(jobId);
       if (event !== null) this.publish(event);
       this.kick();
@@ -110,7 +120,19 @@ export class JobScheduler {
       const event = this.jobs.requeueAfterWorkerExit(snapshot.id);
       if (event !== null) this.publish(event);
     }
+    for (const completion of this.jobs.pendingOutputCompletions(10)) {
+      let preparationError: string | undefined;
+      try { await this.prepareCompletion?.(completion.fence.jobId, completion.result); }
+      catch (error) { preparationError = error instanceof Error ? error.message : "输出文件恢复核验失败"; }
+      const event = this.jobs.finishRecoveredOutput(completion, preparationError);
+      if (event !== null) this.publish(event);
+    }
     for (const event of this.jobs.settleQueued()) this.publish(event);
+    if (this.compositionChanged || Date.now() - this.lastCompositionSweep >= 2000) {
+      this.compositionChanged = false;
+      this.lastCompositionSweep = Date.now();
+      await this.advanceCompositions?.();
+    }
     while (!this.closing && this.pool.idleWorker()) {
       const rows = this.jobs.nextQueued(10);
       if (rows.length === 0) return;
@@ -244,9 +266,28 @@ export class JobScheduler {
       return { accepted: true, code: null };
     }
     if (message.type === "finished") {
+      if (!this.jobs.isFenceValid(message.fence, true)) return { accepted: false, code: "JOB_STALE_LEASE" };
+      if (message.state === "succeeded" && message.result?.jobType === "composition_provider") {
+        const effective = this.providerJournal?.compositionResult(message.fence.jobId);
+        if (effective === null || effective === undefined) return { accepted: false, code: "MODEL_RESULT_UNKNOWN" };
+        message = { ...message, result: effective };
+      }
+      if (message.state === "succeeded" || message.state === "partial") {
+        this.jobs.saveOutputCompletion(message);
+        try { await this.prepareCompletion?.(message.fence.jobId, message.result); }
+        catch (error) {
+          const event = this.jobs.finish({ fence: message.fence, state: "failed", result: message.result,
+            error: { code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : "输出文件准备失败", retryable: true } });
+          if (event !== null) this.publish(event);
+          this.kick();
+          return { accepted: event !== null, code: event === null ? "JOB_STALE_LEASE" : null };
+        }
+      }
+      if (!this.jobs.isFenceValid(message.fence, true)) return { accepted: false, code: "JOB_STALE_LEASE" };
       const event = this.jobs.finish({fence: message.fence, state: message.state, result: message.result, error: message.error});
       if (event === null) return { accepted: false, code: "JOB_STALE_LEASE" };
       this.publish(event);
+      this.compositionChanged = true;
       this.kick();
       return { accepted: true, code: null };
     }
@@ -289,7 +330,7 @@ export class JobScheduler {
     if (message.type === "call_result") {
       if (this.providerJournal === null) return { accepted: false, code: "INTERNAL_ERROR" };
       const result = this.providerJournal.result(message.fence, message);
-      return { accepted: result.accepted, code: null };
+      return { accepted: result.accepted && result.effective, code: result.effective ? null : "JOB_STALE_LEASE" };
     }
     const exhaustive: never = message;
     return exhaustive;

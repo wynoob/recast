@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   ClaimSchema,
+  parseCompositionResponse,
+  type CompositionTask,
   AuthoringOperationSchema,
   type HostToWorkerMessage,
   type WorkerCallIntent,
@@ -65,7 +67,7 @@ export function acceptProviderMessage(message: HostToWorkerMessage): boolean {
   return false;
 }
 
-export async function callTextModel(input: {
+async function callTextTransport(input: {
   fence: WorkerFence;
   purpose: "planning" | "generation" | "revision";
   callOrdinal: number;
@@ -78,7 +80,6 @@ export async function callTextModel(input: {
   envelope: Record<string, unknown>;
   signal: AbortSignal;
 }): Promise<{
-  parsed: { operations: import("@dmall/contracts").AuthoringOperation[]; claims: import("@dmall/contracts").Claim[] };
   rawResponse: string;
   responseHash: string;
   providerRequestId: string | null;
@@ -149,8 +150,21 @@ export async function callTextModel(input: {
     }
     throw new WorkerTaskError("MODEL_SCHEMA_INVALID", `模型请求失败（HTTP ${response.status}）`, false);
   }
-  const parsed = parseAuthoringResponse(rawResponse);
-  return { parsed, rawResponse, responseHash, providerRequestId, cost };
+  return { rawResponse, responseHash, providerRequestId, cost };
+}
+
+export async function callTextModel(input: Parameters<typeof callTextTransport>[0]) {
+  const response = await callTextTransport(input);
+  return { ...response, parsed: parseAuthoringResponse(response.rawResponse) };
+}
+
+export async function callCompositionModel(input: Parameters<typeof callTextTransport>[0] & { task: CompositionTask }) {
+  const response = await callTextTransport(input);
+  try {
+    return { ...response, parsed: parseCompositionResponse(input.task, response.rawResponse) };
+  } catch {
+    throw new WorkerTaskError("MODEL_SCHEMA_INVALID", "模型返回的创作 JSON 不符合固定响应契约", false);
+  }
 }
 
 export async function callAsrModel(input: {

@@ -12,3 +12,5 @@ export * from "./retrieval.js";
 export * from "./facts.js";
 export * from "./search-filters.js";
 export * from "./outputs.js";
+
+export * from "./composition.js";

@@ -9,6 +9,7 @@ import {
   type AcceptCandidateRequest,
   type AcceptCandidateResult,
   type AcceptanceBinding,
+  type ConfirmedComposition,
 } from "@dmall/contracts";
 import {
   compareThreeWay,
@@ -34,6 +35,7 @@ export interface AcceptContext {
   key: string;
   requestHash: string;
   requestId: string;
+  automaticComposition?: string;
 }
 
 export class CandidateAcceptService {
@@ -50,6 +52,33 @@ export class CandidateAcceptService {
   ) {
     this.inputs = inputs ?? new GenerationInputService(db, undefined as never);
     this.plans = plans ?? new PlanService(db);
+  }
+
+  acceptComposition(fixed: ConfirmedComposition, candidateId: string): AcceptCandidateResult {
+    return this.db.transaction(() => {
+      const candidate = this.candidates.require(candidateId);
+      const input = this.inputs.require(candidate.inputId);
+      const stored = this.plans.composition(fixed.proposal.contentId);
+      if (stored?.snapshotHash !== fixed.snapshotHash || input.confirmationId !== fixed.confirmationId ||
+          input.compositionSnapshotHash !== fixed.snapshotHash || candidate.baseRevisionId !== fixed.emptyBaseRevisionId || candidate.renditionId !== fixed.renditionId) {
+        throw new ApiError({ statusCode: 409, code: "COMPOSITION_CONFLICT", message: "候选不属于确认的独占空稿" });
+      }
+      if (candidate.status === "accepted" && candidate.appliedRevisionId !== null && candidate.acceptanceHash !== null) {
+        return AcceptCandidateResultSchema.parse({ candidate, revision: this.revisions.viewById(candidate.appliedRevisionId), acceptanceHash: candidate.acceptanceHash, replayed: true });
+      }
+      const base = this.revisions.viewById(fixed.emptyBaseRevisionId);
+      const empty = base.ast.kind === "feishu_doc" ? base.ast.sections.length === 0 : base.ast.slides.length === 0;
+      if (!empty || this.currentRevision(fixed.renditionId) !== fixed.emptyBaseRevisionId) {
+        throw new ApiError({ statusCode: 409, code: "REVISION_CONFLICT", message: "空稿基线已变化，不能自动覆盖" });
+      }
+      const preview = this.candidates.preview(candidateId);
+      if (preview.conflictGroupIds.length > 0 || preview.blockedGroupIds.length > 0) {
+        throw new ApiError({ statusCode: 422, code: "DRAFT_INVALID", message: "全文候选存在冲突或阻断，不能自动接收" });
+      }
+      const request = AcceptCandidateRequestSchema.parse({ schemaVersion: 1, expectedRevisionId: fixed.emptyBaseRevisionId, previewToken: preview.previewToken, decisions: [], frozenPlanAcknowledgement: null });
+      return this.accept(candidateId, request, { routeScope: "composition:auto-accept", key: fixed.confirmationId,
+        requestHash: fixed.snapshotHash, requestId: fixed.confirmationId, automaticComposition: fixed.proposal.id }).result;
+    }).immediate();
   }
 
   accept(
@@ -183,7 +212,7 @@ export class CandidateAcceptService {
         fixedEvidence: input.evidence,
         createdBy: "ai_accepted",
         expectedCurrentRevisionId: request.expectedRevisionId,
-        reason: `接受候选稿 ${candidate.id}`,
+        reason: context.automaticComposition === undefined ? `接受候选稿 ${candidate.id}` : `按确认方案 ${context.automaticComposition} 自动接收全文`,
       });
       const now = new Date().toISOString();
       const updated = this.db.prepare(

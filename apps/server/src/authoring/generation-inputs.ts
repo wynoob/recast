@@ -54,6 +54,7 @@ const InputRowSchema = z.strictObject({
   prompt_version: z.string(),
   schema_version: z.int(),
   input_hash: z.string(),
+  composition_snapshot_hash: z.string().nullable(),
   created_at: z.string(),
 });
 
@@ -134,7 +135,15 @@ export class GenerationInputService {
       }
       const evidence = this.evidence.list(contentId, input.selectedEvidenceIds);
       const provider = this.textProviderVersion();
+      const composition = this.plans.composition(contentId);
+      if (composition !== null && (composition.confirmationId !== input.confirmationId ||
+        composition.emptyBaseRevisionId !== input.baseRevisionId ||
+        stableJson(evidence) !== stableJson(composition.fixedEvidence) ||
+        template.package_hash !== composition.proposal.template.packageHash)) {
+        throw new ApiError({ statusCode: 409, code: "COMPOSITION_CONFLICT", message: "生成输入与确认快照不匹配" });
+      }
       const identity = {
+        compositionSnapshotHash: composition?.snapshotHash ?? null,
         contentId,
         renditionId,
         baseRevisionId: input.baseRevisionId,
@@ -165,8 +174,8 @@ export class GenerationInputService {
           id, content_id, rendition_id, base_revision_id, root_node_id,
           confirmation_id, target_kind, target_node_ids_json, template_version_id,
           template_package_json, template_hash, evidence_json, unplaced_owner_map_json,
-          provider_config_version, prompt_version, schema_version, input_hash, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+          provider_config_version, prompt_version, schema_version, input_hash, created_at, composition_snapshot_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       ).run(
         id,
         contentId,
@@ -185,6 +194,7 @@ export class GenerationInputService {
         "t06-authoring/1",
         inputHash,
         now,
+        composition?.snapshotHash ?? null,
       );
       return this.require(id);
     }).immediate();
@@ -214,6 +224,7 @@ export class GenerationInputService {
       promptVersion: parsed.prompt_version,
       schemaVersion: 1,
       inputHash: parsed.input_hash,
+      compositionSnapshotHash: parsed.composition_snapshot_hash,
       createdAt: parsed.created_at,
     });
   }

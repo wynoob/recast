@@ -17,6 +17,7 @@ export const ContentStatusSchema = z.enum(["draft", "ready", "archived"]);
 export const AssetMediaKindSchema = z.enum(["image", "gif", "video", "document", "audio"]);
 
 export const ErrorCodeSchema = z.enum([
+  "COMPOSITION_NOT_FOUND", "COMPOSITION_CONFLICT", "COMPOSITION_CONFIRMED", "PROPOSAL_STALE", "COMPOSITION_GAPS", "DRAFT_INVALID", "DELIVERY_IDENTITY_CONFLICT",
   "VALIDATION_ERROR",
   "HOST_NOT_ALLOWED",
   "ORIGIN_NOT_ALLOWED",

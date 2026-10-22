@@ -3,6 +3,12 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import {
   BriefInputSchema,
+  ProposalSchema,
+  ConfirmedCompositionSchema,
+  type Proposal,
+  type ConfirmedComposition,
+  type FixedEvidence,
+  type TemplatePackage,
   ConfirmationViewSchema,
   NodeIdSchema,
   PlanViewSchema,
@@ -43,6 +49,65 @@ export class PlanService {
     messages?: MessageService,
   ) {
     this.messages = messages ?? new MessageService(db);
+  }
+
+  proposal(id: string): Proposal {
+    const row = this.db.prepare("SELECT proposal_json FROM authoring_proposals WHERE id = ?").get(id);
+    if (row === undefined) throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "创作方案不存在" });
+    return ProposalSchema.parse(JSON.parse(z.object({ proposal_json: z.string() }).parse(row).proposal_json));
+  }
+
+  currentProposal(contentId: string, version: number): Proposal | null {
+    const row = this.db.prepare("SELECT id FROM authoring_proposals WHERE content_id = ? AND based_on_version = ?").get(contentId, version);
+    return row === undefined ? null : this.proposal(z.object({ id: z.uuid() }).parse(row).id);
+  }
+
+  saveProposal(proposal: Proposal, recommendJobId: string): void {
+    const value = ProposalSchema.parse(proposal);
+    this.db.prepare(`INSERT INTO authoring_proposals(id, content_id, based_on_version, proposal_json, proposal_hash, recommend_job_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(value.id, value.contentId, value.basedOnVersion, JSON.stringify(value), value.hash, recommendJobId, new Date().toISOString());
+  }
+
+  composition(contentId: string): ConfirmedComposition | null {
+    const row = this.db.prepare("SELECT composition_snapshot_json FROM authoring_confirmations WHERE content_id = ? AND proposal_id IS NOT NULL").get(contentId);
+    return row === undefined ? null : ConfirmedCompositionSchema.parse(JSON.parse(z.object({ composition_snapshot_json: z.string() }).parse(row).composition_snapshot_json));
+  }
+
+  confirmComposition(input: {
+    proposal: Proposal; templatePackage: TemplatePackage; fixedEvidence: FixedEvidence[];
+    renditionId: string; emptyBaseRevisionId: string; merchantId: string | null;
+  }): ConfirmedComposition {
+    return this.db.transaction(() => {
+      const prior = this.composition(input.proposal.contentId);
+      if (prior !== null) {
+        if (prior.proposal.id !== input.proposal.id || prior.proposal.hash !== input.proposal.hash) {
+          throw new ApiError({ statusCode: 409, code: "COMPOSITION_CONFIRMED", message: "该创作已确认其他方案" });
+        }
+        return prior;
+      }
+      const proposal = input.proposal;
+      const content = this.requireContent(proposal.contentId);
+      if (content.version !== proposal.basedOnVersion) throw new ApiError({ statusCode: 409, code: "PROPOSAL_STALE", message: "方案已被调整，请确认当前方案" });
+      const message = this.messages.create(proposal.contentId, { schemaVersion: 1, mode: "note", text: "确认方案，授权生成全文、自动接收并交付所选成品", renditionId: input.renditionId, targetNodeIds: [] });
+      const now = new Date().toISOString();
+      const snapshot = {
+        confirmationId: randomUUID(), proposal, confirmedContentVersion: content.version + 1,
+        renditionId: input.renditionId, emptyBaseRevisionId: input.emptyBaseRevisionId,
+        templatePackage: input.templatePackage, fixedEvidence: input.fixedEvidence,
+        authorization: { kind: "generate_accept_deliver", messageId: message.id, confirmedAt: now },
+      };
+      const fixed = ConfirmedCompositionSchema.parse({ ...snapshot, snapshotHash: sha256(stableJson(snapshot)) });
+      const outline = ("sections" in proposal ? proposal.sections.map((item) => item.heading) : proposal.slides.map((item) => item.title)).map((title) => ({ id: NodeIdSchema.parse(randomUUID()), title }));
+      const brief = createBrief({ goal: proposal.purpose, audience: [proposal.audience], merchantId: input.merchantId, durationMinutes: null,
+        userOutline: outline, mustKeepOutline: true, tone: "", sourceScope: { sourceVersionIds: [], excludeIds: [] }, unresolvedQuestions: [] }, { contentId: proposal.contentId, kind: proposal.delivery.kind });
+      const changed = this.db.prepare("UPDATE contents SET version = version + 1, title = ?, brief_json = ?, merchant_id = ?, updated_at = ? WHERE id = ? AND version = ?")
+        .run(proposal.title, JSON.stringify(brief), input.merchantId, now, proposal.contentId, proposal.basedOnVersion);
+      if (changed.changes !== 1) throw new ApiError({ statusCode: 409, code: "COMPOSITION_CONFLICT", message: "创作版本已变化" });
+      this.db.prepare(`INSERT INTO authoring_confirmations(id, content_id, content_version, brief_json, outline_json, question_decisions_json, confirmed_by_message_id, plan_hash, created_at, proposal_id, composition_snapshot_json, composition_snapshot_hash) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?)`)
+        .run(fixed.confirmationId, proposal.contentId, fixed.confirmedContentVersion, JSON.stringify(brief), JSON.stringify(outline), message.id, proposal.hash, now, proposal.id, JSON.stringify(fixed), fixed.snapshotHash);
+      this.db.prepare("UPDATE messages SET mode = 'confirm_outline', plan_id = ? WHERE id = ?").run(fixed.confirmationId, message.id);
+      return fixed;
+    }).immediate();
   }
 
   confirm(contentId: string, request: ConfirmPlanRequest): PlanView {

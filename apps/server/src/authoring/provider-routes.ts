@@ -283,7 +283,7 @@ export function registerProviderRoutes(input: {
   });
 }
 
-function requireProvider(db: Database.Database, role: "text" | "asr"): {
+export function requireProvider(db: Database.Database, role: "text" | "asr"): {
   id: string;
   baseUrl: string;
   modelId: string;

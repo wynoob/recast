@@ -3,6 +3,9 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import {
   JobInputSchema,
+  JobResultSchema,
+  parseCompositionResponse,
+  type JobResult,
   type WorkerCallIntent,
   type WorkerCallResult,
   type WorkerFence,
@@ -47,6 +50,7 @@ export class ProviderJournal {
     const job = this.currentJob(fence);
     const input = JobInputSchema.parse(JSON.parse(job.input_json) as unknown);
     if (
+      input.jobType !== "composition_provider" &&
       input.jobType !== "authoring_provider" &&
       input.jobType !== "authoring_transcription" &&
       input.jobType !== "authoring_probe"
@@ -73,7 +77,7 @@ export class ProviderJournal {
         ? "transcription"
         : input.jobType === "authoring_probe"
           ? "probe"
-          : input.task === "plan"
+          : input.task === "plan" || input.task === "intent" || input.task === "recommend"
             ? "planning"
             : input.task === "revise"
               ? "revision"
@@ -235,15 +239,29 @@ export class ProviderJournal {
         message: "模型结果与逻辑调用不匹配",
       });
     }
+    if (message.responseHash !== `resp1:${sha256(message.rawResponse)}`) {
+      throw new ApiError({ statusCode: 422, code: "CALL_IDENTITY_CONFLICT", message: "模型响应 hash 不匹配" });
+    }
+    const job = z.object({ state: z.string(), attempt: z.int(), lease_generation: z.int(), lease_owner: z.string().nullable(), lease_until: z.string().nullable(), cancel_requested: z.int() }).parse(
+      this.db.prepare("SELECT state, attempt, lease_generation, lease_owner, lease_until, cancel_requested FROM jobs WHERE id = ?").get(fence.jobId),
+    );
     const currentFence =
+      job.state === "running" && job.cancel_requested === 0 && job.attempt === fence.attempt &&
+      job.lease_generation === fence.leaseGeneration && job.lease_owner === fence.leaseOwner &&
+      job.lease_until !== null && Date.parse(job.lease_until) > Date.now() &&
       call.fence_attempt === fence.attempt &&
       call.fence_lease_generation === fence.leaseGeneration &&
       call.lease_owner === fence.leaseOwner;
     if (call.state === "completed" && call.response_hash === message.responseHash) {
-      return { accepted: true, effective: true };
+      return { accepted: true, effective: currentFence };
     }
     const effective = currentFence && (call.state === "dispatched" || call.state === "prepared");
     return this.db.transaction(() => {
+      if (!effective) {
+        this.db.prepare(`INSERT INTO provider_late_responses(id, attempt_id, response_hash, raw_response, provider_request_id, cost_json, effective, received_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)`)
+          .run(randomUUID(), call.attempt_id, message.responseHash, message.rawResponse, message.providerRequestId, message.cost === null ? null : JSON.stringify(message.cost), new Date().toISOString());
+        return { accepted: true, effective: false };
+      }
       const payloadExists = this.db.prepare(
         "SELECT attempt_id FROM provider_call_payloads WHERE attempt_id = ?",
       ).get(call.attempt_id);
@@ -254,23 +272,6 @@ export class ProviderJournal {
           ) VALUES (?, ?, ?, ?)`,
         ).run(call.attempt_id, call.request_envelope_json, message.rawResponse, new Date().toISOString());
       } else if (call.response_hash !== null && call.response_hash !== message.responseHash) {
-        this.db.prepare(
-          `INSERT INTO provider_late_responses(
-            id, attempt_id, response_hash, raw_response, provider_request_id, cost_json,
-            effective, received_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
-        ).run(
-          randomUUID(),
-          call.attempt_id,
-          message.responseHash,
-          message.rawResponse,
-          message.providerRequestId,
-          message.cost === null ? null : JSON.stringify(message.cost),
-          new Date().toISOString(),
-        );
-        return { accepted: true, effective: false };
-      }
-      if (!effective) {
         this.db.prepare(
           `INSERT INTO provider_late_responses(
             id, attempt_id, response_hash, raw_response, provider_request_id, cost_json,
@@ -302,6 +303,34 @@ export class ProviderJournal {
       );
       return { accepted: true, effective: true };
     }).immediate();
+  }
+
+  compositionResult(jobId: string): JobResult | null {
+    const row = this.db.prepare(`SELECT j.input_json, j.input_hash, c.request_hash, c.response_hash, p.raw_response,
+        c.provider_request_id, c.cost_json, c.request_envelope_json
+      FROM jobs j JOIN provider_calls c ON c.job_id = j.id
+      JOIN provider_call_payloads p ON p.attempt_id = c.attempt_id
+      WHERE j.id = ? AND j.type = 'composition_provider' AND j.cancel_requested = 0
+        AND c.state = 'completed' AND c.fence_attempt = j.attempt AND c.fence_lease_generation = j.lease_generation
+      ORDER BY c.completed_at DESC LIMIT 1`).get(jobId);
+    if (row === undefined) return null;
+    const stored = z.object({ input_json: z.string(), input_hash: z.string(), request_hash: z.string(), response_hash: z.string(), raw_response: z.string(), provider_request_id: z.string().nullable(), cost_json: z.string().nullable(), request_envelope_json: z.string() }).parse(row);
+    const input = JobInputSchema.parse(JSON.parse(stored.input_json));
+    if (input.jobType !== "composition_provider") return null;
+    if (stored.request_hash !== `rh1:${sha256(stableJson(input.requestEnvelope))}` ||
+        stableJson(JSON.parse(stored.request_envelope_json)) !== stableJson(input.requestEnvelope) ||
+        stored.response_hash !== `resp1:${sha256(stored.raw_response)}` || stored.input_hash !== sha256(stableJson(input))) {
+      throw new ApiError({ statusCode: 422, code: "CALL_IDENTITY_CONFLICT", message: "保存的模型响应与固定输入不匹配" });
+    }
+    try {
+      return JobResultSchema.parse({ schemaVersion: 1, jobType: "composition_provider", contentId: input.contentId, renditionId: input.renditionId,
+        inputId: input.inputId, response: parseCompositionResponse(input.task, stored.raw_response), rawResponse: stored.raw_response,
+        responseHash: stored.response_hash, providerRequestId: stored.provider_request_id,
+        cost: stored.cost_json === null ? null : JSON.parse(stored.cost_json),
+      });
+    } catch {
+      throw new ApiError({ statusCode: 422, code: "MODEL_SCHEMA_INVALID", message: "保存的模型响应不符合创作契约" });
+    }
   }
 
   cancelJob(jobId: string): void {

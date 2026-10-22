@@ -1,3 +1,5 @@
+import { Composer } from "./authoring/composer.js";
+import { registerComposerRoutes } from "./authoring/composer-routes.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -81,6 +83,7 @@ export interface AppContext {
   localGeneration: LocalGenerationService;
   derive: DeriveService;
   providerJournal: ProviderJournal;
+  composer: Composer;
 }
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -223,6 +226,8 @@ export async function createApp(input?: {
     });
     const providerJournal = new ProviderJournal(database.db);
     jobs.setRecoveryClassifier((id) => providerJournal.classifyRecovery(id));
+    const composer = new Composer({ db: database.db, blobs, contents, jobs, plans, evidence: authoringEvidence, retrieval, messages,
+      inputs: generationInputs, candidates, accept, revisions, journal: providerJournal, outputs });
     const scheduler = new JobScheduler({
       jobs,
       pool,
@@ -232,6 +237,8 @@ export async function createApp(input?: {
       providerJournal,
       remoteOps,
       prepareOutputGrant: (grant) => outputs.prepareGrant(grant),
+      prepareCompletion: (jobId, result) => outputs.prepareCompletion(jobId, result),
+      advanceCompositions: () => composer.sweep(),
     });
     openedScheduler = scheduler;
     const requestSessions = new WeakMap<FastifyRequest, SessionView>();
@@ -270,6 +277,8 @@ export async function createApp(input?: {
       requestSessions,
     });
 
+    registerComposerRoutes({ app, composer, idempotency, kick: () => scheduler.kick() });
+
     if (input?.startWorkers !== false) {
       await scheduler.start();
     }
@@ -279,6 +288,7 @@ export async function createApp(input?: {
     app.addHook("onClose", cleanup);
 
     return {
+      composer,
       app,
       config,
       database,
@@ -447,6 +457,19 @@ function registerRoutes(input: {
     requestIdFor,
   });
 
+  const retiredAuthoringWrites = new Set([
+    "/api/v1/renditions/:id/revisions", "/api/v1/renditions/:id/restore",
+    "/api/v1/contents/:id/messages", "/api/v1/contents/:id/plan/confirm", "/api/v1/contents/:id/evidence/select",
+    "/api/v1/renditions/:id/generation-inputs", "/api/v1/renditions/:id/local-generation", "/api/v1/renditions/:id/candidates",
+    "/api/v1/candidates/:id/accept", "/api/v1/candidates/:id/reject", "/api/v1/contents/:id/derive",
+    "/api/v1/generation-inputs/:id/generate", "/api/v1/contents/:id/transcribe",
+  ]);
+  app.addHook("onRoute", (route) => {
+    if (route.method === "POST" && retiredAuthoringWrites.has(route.url)) {
+      route.handler = async () => { throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "旧写稿入口已退出，请使用 AI 创作" }); };
+    }
+  });
+
   registerAuthoringRoutes({ app, idempotency, revisions });
   registerFullAuthoringRoutes({
     app,
@@ -588,6 +611,10 @@ function registerRoutes(input: {
   });
 
   app.patch("/api/v1/contents/:id", async (request, reply) => {
+    const contentId = parseId(request.params);
+    if (db.db.prepare("SELECT id FROM jobs WHERE type = 'composition_provider' AND json_extract(input_json, '$.contentId') = ? LIMIT 1").get(contentId) !== undefined) {
+      throw new ApiError({ statusCode: 409, code: "COMPOSITION_CONFLICT", message: "AI 创作只能通过方案调整修改要求" });
+    }
     const body = parseUpdateContent(request.body);
     const id = parseId(request.params);
     const key = idempotency.requireKey(request.headers["idempotency-key"]);
@@ -716,6 +743,9 @@ function registerRoutes(input: {
     const existing = idempotency.find(scope, key);
     if (existing !== null) return replay(reply, existing, hash);
     const requestId = requestIdFor(request);
+    if (db.db.prepare("SELECT e.id FROM exports e JOIN export_jobs ej ON ej.export_id = e.id WHERE ej.job_id = ? AND e.business_key IS NOT NULL").get(id) !== undefined) {
+      throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "请通过原创作交付决策恢复输出" });
+    }
     const snapshot = scheduler.resume(id, (current) => {
       idempotency.save({
         routeScope: scope,
