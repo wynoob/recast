@@ -110,6 +110,9 @@ async function stageRenderMedia(grant: JobGrant, workspace: string, pdfMode: boo
     if (!existsSync(source)) {
       throw new WorkerTaskError("EXPORT_MEDIA_MISSING", `导出媒体文件缺失：${media.key}`);
     }
+    if (sha256(readFileSync(source)) !== media.blobHash || statSync(source).size !== media.bytes) {
+      throw new WorkerTaskError("EXPORT_MEDIA_MISSING", `导出媒体校验失败：${media.key}`);
+    }
     const safeBase = `${String(index + 1).padStart(3, "0")}-${safeName(media.originalName)}`;
     if (pdfMode && media.mime === "image/gif") {
       const destination = join(assetsDir, `${safeBase.replace(/\.gif$/iu, "")}-still.png`);
@@ -226,6 +229,7 @@ export async function runExportOutputJob(grant: JobGrant, deps: OutputJobDeps): 
   const manifestBase = {
     schemaVersion: 1,
     kind: "dcw_offline_html",
+    exportId: grant.input.exportId,
     revisionId: grant.input.revisionId,
     contentId: grant.input.contentId,
     renditionId: grant.input.renditionId,
@@ -627,6 +631,12 @@ export async function runFeishuPublishJob(
     throw new WorkerTaskError("INTERNAL_ERROR", "飞书发布输入不匹配");
   }
   const input = grant.input;
+  for (const media of input.media) {
+    const source = relativeInside(blobRoot(grant), join(blobRoot(grant), media.relativePath));
+    if (!existsSync(source) || statSync(source).size !== media.bytes || sha256(readFileSync(source)) !== media.blobHash) {
+      throw new WorkerTaskError("EXPORT_MEDIA_MISSING", `飞书媒体文件缺失或校验失败：${media.key}`);
+    }
+  }
   let client: FeishuClient;
   try {
     client = new FeishuClient();
@@ -703,7 +713,7 @@ export async function runFeishuPublishJob(
             client, deps, input, documentId, block, existingBlockId,
             mediaByKey, root, checkpoint, revisionId,
           );
-        } else if (block.kind === "table") {
+        } else if (block.kind === "table" && checkpoint.pendingTableCells.includes(existingBlockId)) {
           checkpoint = await fillExistingTable(
             client, deps, input, documentId, block, existingBlockId, checkpoint,
           );
@@ -739,13 +749,19 @@ export async function runFeishuPublishJob(
   const readback = await readAllBlocks(client, documentId);
   const expectedText = plan.blocks.flatMap(textOfPlannedBlock).filter((value) => value !== "");
   const readbackText = readback.flatMap(textOfFeishuBlock).filter((value) => value !== "");
-  if (expectedText.some((text) => !readbackText.some((remote) => remote.includes(text.slice(0, Math.min(text.length, 80)))))) {
+  const missingImages = plan.blocks.filter((block) => block.kind === "image" || block.kind === "video_poster")
+    .some((block) => !readback.some((remote) => {
+      if (remote.block_id !== checkpoint.blockMap[block.nodeId] || remote.image === null || typeof remote.image !== "object") return false;
+      return "token" in remote.image && remote.image.token === checkpoint.mediaMap[block.nodeId];
+    }));
+  const textMismatch = expectedText.some((text) => !readbackText.some((remote) => remote.includes(text)));
+  if (textMismatch || missingImages) {
     warnings.push({
       code: "FEISHU_READBACK_MISMATCH",
-      message: "飞书读回文本与本地写入计划存在差异，已保留文档链接和块映射，请人工核对。",
+      message: "飞书读回正文或图片与本地写入计划存在差异，已保留文档链接和块映射，请人工核对。",
     });
   }
-  checkpoint = { ...checkpoint, phase: "readback_verified" };
+  if (!textMismatch && !missingImages) checkpoint = { ...checkpoint, phase: "readback_verified" };
   deps.emitCheckpoint(checkpoint);
   return {
     schemaVersion: 1,
@@ -925,11 +941,13 @@ async function fillTableCellBlocks(
   }
   const allRows = [block.columns, ...block.rows];
   for (const [index, cellId] of cells.entries()) {
+    const cellKey = `${block.nodeId}:cell:${index}`;
+    if (checkpoint.blockMap[cellKey] !== undefined) continue;
     const row = allRows[Math.floor(index / block.columns.length)] ?? [];
     const value = row[index % block.columns.length] ?? "";
     const cellToken = clientToken(`${input.exportId}:cell:${block.nodeId}:${index}`);
     try {
-      await deps.withRemoteOperation({
+      const response = await deps.withRemoteOperation({
         kind: "feishu_create_blocks",
         requestHash: sha256(JSON.stringify({ cellId, value })),
         clientToken: cellToken,
@@ -945,6 +963,10 @@ async function fillTableCellBlocks(
         }])],
         clientToken: cellToken,
       }));
+      const remote = response.children[0];
+      if (remote === undefined) throw new WorkerTaskError("REMOTE_RESULT_UNKNOWN", "飞书未返回表格单元格正文", true);
+      checkpoint = { ...checkpoint, blockMap: { ...checkpoint.blockMap, [cellKey]: remote.block_id } };
+      deps.emitCheckpoint(checkpoint);
     } catch (error) {
       if (error instanceof RemoteResultUnknownError) {
         await deps.waitForInput(checkpoint, "REMOTE_RESULT_UNKNOWN", "飞书表格单元格写入结果未知，请核对远端文档后继续。");
@@ -977,7 +999,7 @@ async function attachImageToExistingBlock(
   const filePath = relativeInside(root, join(root, media.relativePath));
   let fileToken: string;
   try {
-    fileToken = await deps.withRemoteOperation({
+    fileToken = checkpoint.mediaMap[`${block.nodeId}:uploaded`] ?? await deps.withRemoteOperation({
       kind: "feishu_upload_media",
       requestHash: sha256(JSON.stringify({ blockId, media: media.relativePath })),
       clientToken: clientToken(`${input.exportId}:media:${block.nodeId}`),
@@ -987,6 +1009,8 @@ async function attachImageToExistingBlock(
       filePath,
       fileName: media.originalName,
     }));
+    checkpoint = { ...checkpoint, mediaMap: { ...checkpoint.mediaMap, [`${block.nodeId}:uploaded`]: fileToken } };
+    deps.emitCheckpoint(checkpoint);
   } catch (error) {
     if (error instanceof RemoteResultUnknownError) {
       await deps.waitForInput(checkpoint, "REMOTE_RESULT_UNKNOWN", "飞书图片上传结果未知，请核对远端文档后继续。");
@@ -1016,7 +1040,7 @@ async function attachImageToExistingBlock(
   let next: Extract<JobCheckpoint, { jobType: "feishu_publish" }> = {
     ...checkpoint,
     phase: "media_uploaded",
-    mediaMap: { ...checkpoint.mediaMap, [block.nodeId]: fileToken },
+    mediaMap: { ...checkpoint.mediaMap },
   };
   if (plannedPayload(block).caption.trim() !== "") {
     const captionToken = clientToken(`${input.exportId}:caption:${block.nodeId}`);
@@ -1045,7 +1069,7 @@ async function attachImageToExistingBlock(
       throw error;
     }
   }
-  next = { ...next, phase: "media_uploaded" };
+  next = { ...next, phase: "media_uploaded", mediaMap: { ...next.mediaMap, [block.nodeId]: fileToken } };
   deps.emitCheckpoint(next);
   return next;
 }
@@ -1074,11 +1098,11 @@ function textOfPlannedBlock(block: FeishuPlannedBlock): string[] {
     case "list":
       return block.items.map((item) => item.map((run) => run.text).join(""));
     case "table":
-      return [block.columns.join(""), ...block.rows.map((row) => row.join(""))];
+      return [...block.columns, ...block.rows.flat()];
     case "readonly_source":
       return [block.summary];
     case "image":
-      return [block.caption, block.alt];
+      return [block.caption || block.alt];
     case "video_poster":
       return [block.caption];
     case "divider":

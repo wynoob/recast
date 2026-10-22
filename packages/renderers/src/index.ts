@@ -1,4 +1,5 @@
 export {
+  DECK_SCRIPT,
   astMediaKeys,
   blockMediaKeys,
   renderProductionOutput,

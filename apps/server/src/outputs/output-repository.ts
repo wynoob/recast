@@ -1,10 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -17,11 +15,14 @@ import {
   ExportRecordSchema,
   ExportStatusSchema,
   JobInputSchema,
+  JobCheckpointSchema,
   AstSchema,
   OutputDecisionSchema,
   OutputPreviewSchema,
   ProjectBundleImportRequestSchema,
   PullRequestSchema,
+  type DeliveryTarget,
+  type ResumeCommand,
   type ExportArtifact,
   type ExportList,
   type ExportRecord,
@@ -31,6 +32,7 @@ import {
   type OutputDecision,
   type PullRecord,
 } from "@dmall/contracts";
+import { validateZipPath } from "@dmall/renderers";
 import { deriveRevisionRefs } from "@dmall/domain";
 import type { BlobStore } from "@dmall/storage";
 import { ApiError } from "../errors.js";
@@ -42,6 +44,8 @@ import { OutputMediaPlanner } from "./media-plan.js";
 import { loadOutputTemplate } from "./template-source.js";
 import { buildProjectBundlePlan } from "./bundle-builder.js";
 import { applyProjectBundleImport } from "./bundle-import.js";
+import { readOfflineHtml } from "./html-preview.js";
+import { verifyFeishuDocument } from "./feishu-verification.js";
 import type { ImportRepository } from "../import-repository.js";
 
 const ExportJobRowSchema = z.strictObject({
@@ -182,6 +186,7 @@ export class OutputRepository {
   private readonly dataRoot: string;
   private readonly imports: ImportRepository;
   private readonly planner: OutputMediaPlanner;
+  private readonly preparedExports = new Map<string, { resultHash: string; artifacts: z.infer<typeof ArtifactRowSchema>[] }>();
 
   constructor(input: {
     db: Database.Database;
@@ -223,14 +228,205 @@ export class OutputRepository {
       ? null
       : z.strictObject({ decision_json: z.string() }).parse(decisionRow).decision_json;
     const parsedDecision = remoteDecision === null ? null : JSON.parse(remoteDecision) as unknown;
+    let checkpoint = grant.checkpoint;
+    if (type === "feishu_publish" && (checkpoint?.jobType !== "feishu_publish" || checkpoint.documentId === null)) {
+      const attached = OutputDecisionSchema.parse(parsedDecision)?.kind === "feishu_attach";
+      const created = this.db.prepare(`SELECT response_json FROM remote_operations WHERE job_id = ?
+        AND kind = 'feishu_create_document' AND state = 'confirmed' ORDER BY updated_at DESC LIMIT 1`).get(grant.jobId);
+      if (!attached && created !== undefined) {
+        const response = z.object({ response_json: z.string() }).parse(created);
+        const { documentId } = z.object({ documentId: z.string().min(1) }).parse(JSON.parse(response.response_json));
+        checkpoint = JobCheckpointSchema.parse({
+          schemaVersion: 1, jobType: "feishu_publish",
+          batchIndex: 0, blockMap: {}, mediaMap: {}, pendingTableCells: [],
+          ...(checkpoint?.jobType === "feishu_publish" ? checkpoint : {}),
+          phase: "document_created",
+          documentId, documentUrl: `https://feishu.cn/docx/${encodeURIComponent(documentId)}`,
+        });
+      } else if (!attached && this.db.prepare(`SELECT operation_id FROM remote_operations WHERE job_id = ?
+        AND kind = 'feishu_create_document' AND state IN ('dispatched', 'unknown') LIMIT 1`).get(grant.jobId) !== undefined) {
+        throw new ApiError({ statusCode: 409, code: "REMOTE_RESULT_UNKNOWN", message: "原飞书创建结果未知，必须先核对并绑定，不能重新创建" });
+      }
+    }
     return {
       ...grant,
+      checkpoint,
       workspacePath,
       blobRoot: this.dataRoot,
       ...(parsedDecision === null
         ? {}
         : { remoteDecision: OutputDecisionSchema.parse(parsedDecision) }),
     };
+  }
+
+  async createForComposition(input: {
+    contentId: string; renditionId: string; revisionId: string;
+    target: DeliveryTarget; exportId: string; jobId: string;
+    businessKey: string; requestHash: string;
+  }): Promise<{ exportId: string; jobId: string }> {
+    const existing = this.compositionExport(input);
+    if (existing !== null) return existing;
+    const revision = loadRevisionOutputSource(this.db, input.revisionId);
+    const rendition = this.requireRendition(input.renditionId);
+    if (revision.renditionId !== input.renditionId || rendition.content_id !== input.contentId
+      || rendition.kind !== input.target.kind || revision.ast.kind !== input.target.kind) {
+      throw new ApiError({ statusCode: 409, code: "DELIVERY_IDENTITY_CONFLICT", message: "交付身份与修订或内容类型不匹配" });
+    }
+    const template = loadOutputTemplate(this.db, revision.templateVersionId, rendition.kind);
+    const media = this.planner.plan(revision.ast);
+    if (input.target.kind === "feishu_doc" && !this.hasFeishuCredential()) {
+      throw new ApiError({ statusCode: 409, code: "FEISHU_AUTH_MISSING", message: "飞书用户凭证未配置" });
+    }
+    const title = revision.ast.title;
+    const format = input.target.kind === "feishu_doc" ? "feishu_doc" : "html_zip";
+    const options = {
+      speakerNotes: input.target.kind === "html_deck", includeHiddenBlocks: false,
+      ...(input.target.kind === "feishu_doc" ? { feishu: {
+        publish: true, confirmedCreateDocument: true,
+        ...(input.target.folderToken === null ? {} : { folderToken: input.target.folderToken }),
+      } } : {}),
+    };
+    const common = {
+      schemaVersion: 1, exportId: input.exportId, contentId: input.contentId,
+      renditionId: input.renditionId, revisionId: input.revisionId, title, ast: revision.ast,
+      templateVersionId: template.templateVersionId, templatePackage: template.package,
+      options, media: media.items,
+    };
+    const jobInput = JobInputSchema.parse(input.target.kind === "feishu_doc"
+      ? { ...common, jobType: "feishu_publish", folderToken: input.target.folderToken }
+      : { ...common, jobType: "export_output", format: "html_zip" });
+    return this.db.transaction(() => {
+      const replay = this.compositionExport(input);
+      if (replay !== null) return replay;
+      if (this.db.prepare("SELECT id FROM exports WHERE id = ?").get(input.exportId) !== undefined
+        || this.jobs.get(input.jobId) !== null) {
+        throw new ApiError({ statusCode: 409, code: "DELIVERY_IDENTITY_CONFLICT", message: "交付 ID 已用于另一任务" });
+      }
+      const createdAt = now();
+      this.db.prepare(`INSERT INTO exports
+        (id, rendition_id, revision_id, format, options_json, status, output_blob_hash,
+         warning_json, created_at, updated_at, business_key, composition_request_hash)
+        VALUES (?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?)`)
+        .run(input.exportId, input.renditionId, input.revisionId, format, JSON.stringify(options),
+          JSON.stringify({ warnings: media.warnings }), createdAt, createdAt, input.businessKey, input.requestHash);
+      const jobRequest = {
+        id: input.jobId, type: jobInput.jobType, input: jobInput, inputHash: input.requestHash,
+        idempotencyKey: null, businessKey: input.businessKey,
+      };
+      this.jobs.create(jobRequest);
+      this.db.prepare(`INSERT INTO export_jobs
+        (export_id, job_id, content_id, rendition_id, revision_id, format, speaker_notes,
+         renderer_version, title, media_summary_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.exportId, input.jobId, input.contentId, input.renditionId, input.revisionId,
+          format, options.speakerNotes ? 1 : 0, template.package.rendererVersion,
+          title, JSON.stringify(media.summary), createdAt, createdAt);
+      return { exportId: input.exportId, jobId: input.jobId };
+    }).immediate();
+  }
+
+  private compositionExport(input: {
+    businessKey: string; requestHash: string; exportId: string; jobId: string;
+    contentId: string; renditionId: string; revisionId: string; target: DeliveryTarget;
+  }): { exportId: string; jobId: string } | null {
+    const found = this.db.prepare(`SELECT e.id, e.composition_request_hash, e.options_json, ej.job_id,
+      ej.content_id, ej.rendition_id, ej.revision_id, ej.format
+      FROM exports e JOIN export_jobs ej ON ej.export_id = e.id WHERE e.business_key = ?`).get(input.businessKey);
+    if (found === undefined) return null;
+    const row = z.object({ id: z.string(), composition_request_hash: z.string(), options_json: z.string(),
+      job_id: z.string(), content_id: z.string(), rendition_id: z.string(), revision_id: z.string(), format: z.string() }).parse(found);
+    const options = CreateExportRequestSchema.shape.options.parse(JSON.parse(row.options_json));
+    if (row.id !== input.exportId || row.job_id !== input.jobId || row.composition_request_hash !== input.requestHash
+      || row.content_id !== input.contentId || row.rendition_id !== input.renditionId || row.revision_id !== input.revisionId
+      || row.format !== (input.target.kind === "feishu_doc" ? "feishu_doc" : "html_zip")
+      || (input.target.kind === "feishu_doc" && (options.feishu?.folderToken ?? null) !== input.target.folderToken)) {
+      throw new ApiError({ statusCode: 409, code: "DELIVERY_IDENTITY_CONFLICT", message: "业务交付键已绑定不同输入或输出身份" });
+    }
+    return { exportId: row.id, jobId: row.job_id };
+  }
+
+  async resumeForComposition(input: {
+    exportId: string; expectedDecisionVersion: number; decision: ResumeCommand["decision"];
+    commandId: string; requestHash: string;
+  }): Promise<void> {
+    const record = this.get(input.exportId);
+    const receiptKey = `composition:delivery-resume:${input.commandId}`;
+    const replay = () => {
+      const saved = this.db.prepare("SELECT job_id, input_hash, result_json FROM worker_receipts WHERE receipt_key = ?").get(receiptKey);
+      if (saved === undefined) return false;
+      const receipt = z.object({ job_id: z.string(), input_hash: z.string(), result_json: z.string() }).parse(saved);
+      if (receipt.job_id !== record.jobId || receipt.input_hash !== input.requestHash
+        || receipt.result_json !== JSON.stringify(input)) {
+        throw new ApiError({ statusCode: 409, code: "IDEMPOTENCY_CONFLICT", message: "恢复命令已用于不同请求" });
+      }
+      return true;
+    };
+    const sameDecision = () => {
+      const rows = z.array(z.object({ result_json: z.string() })).parse(this.db.prepare(`SELECT result_json
+        FROM worker_receipts WHERE job_id = ? AND receipt_key LIKE 'composition:delivery-resume:%'`).all(record.jobId));
+      return rows.some((row) => {
+        const saved = z.object({ exportId: z.string(), expectedDecisionVersion: z.number(), decision: z.unknown() }).parse(JSON.parse(row.result_json));
+        return saved.exportId === input.exportId && saved.expectedDecisionVersion === input.expectedDecisionVersion
+          && JSON.stringify(saved.decision) === JSON.stringify(input.decision);
+      });
+    };
+    if (replay() || sameDecision() || record.status === "succeeded") return;
+    const validate = () => {
+      const job = this.jobs.get(record.jobId);
+      if (job === null || !["waiting_input", "failed", "partial"].includes(job.snapshot.state)
+        || job.snapshot.cancelRequested) {
+        throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "原交付当前不能恢复" });
+      }
+      const versionRow = this.db.prepare("SELECT decision_version FROM output_job_decisions WHERE job_id = ?").get(record.jobId);
+      const version = versionRow === undefined ? 0 : z.object({ decision_version: z.int() }).parse(versionRow).decision_version;
+      if (version !== input.expectedDecisionVersion) {
+        throw new ApiError({ statusCode: 409, code: "COMPOSITION_CONFLICT", message: "交付决策版本已变化，请重新读取" });
+      }
+      const checkpoint = job.snapshot.checkpoint?.jobType === "feishu_publish" ? job.snapshot.checkpoint : null;
+      if (input.decision.kind === "retry_original") {
+        const unknown = this.db.prepare(`SELECT operation_id FROM remote_operations WHERE job_id = ?
+          AND kind = 'feishu_create_document' AND state IN ('dispatched', 'unknown') LIMIT 1`).get(record.jobId);
+        if (unknown !== undefined && checkpoint?.documentId == null) {
+          throw new ApiError({ statusCode: 409, code: "REMOTE_RESULT_UNKNOWN", message: "创建结果未知，必须核对并绑定原文档" });
+        }
+        return;
+      }
+      const decision = input.decision;
+      if (record.format !== "feishu_doc" || !decision.confirmedOriginal
+        || (checkpoint?.documentId != null && checkpoint.documentId !== decision.documentId)) {
+        throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "不能替换原交付文档" });
+      }
+      const operation = this.db.prepare(`SELECT operation_id FROM remote_operations
+        WHERE job_id = ? AND operation_id = ? AND kind = 'feishu_create_document'
+        AND state IN ('dispatched', 'unknown') LIMIT 1`).get(record.jobId, decision.operationId);
+      const otherBinding = this.db.prepare(`SELECT id FROM feishu_bindings WHERE remote_document_id = ?
+        AND (rendition_id != ? OR exported_revision_id != ?) LIMIT 1`)
+        .get(decision.documentId, record.renditionId, record.revisionId);
+      const otherDecision = this.db.prepare(`SELECT job_id FROM output_job_decisions WHERE job_id != ?
+        AND json_extract(decision_json, '$.documentId') = ? LIMIT 1`).get(record.jobId, decision.documentId);
+      if (operation === undefined || otherBinding !== undefined || otherDecision !== undefined) {
+        throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "文档与原创建操作的归属核对失败" });
+      }
+    };
+    validate();
+    let decision: OutputDecision = null;
+    if (input.decision.kind === "bind_verified_document") {
+      const verified = await verifyFeishuDocument(input.decision.documentId);
+      decision = { kind: "feishu_attach", documentId: input.decision.documentId, documentUrl: verified.url };
+    }
+    this.db.transaction(() => {
+      if (replay() || sameDecision()) return;
+      validate();
+      this.db.prepare(`INSERT INTO output_job_decisions(job_id, decision_json, created_at, updated_at, decision_version)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET decision_json = excluded.decision_json,
+        updated_at = excluded.updated_at, decision_version = excluded.decision_version`)
+        .run(record.jobId, JSON.stringify(decision), now(), now(), input.expectedDecisionVersion + 1);
+      if (this.jobs.snapshotById(record.jobId).state === "waiting_input") this.jobs.resume(record.jobId);
+      else this.jobs.resumeOutput(record.jobId);
+      this.db.prepare("UPDATE exports SET status = 'queued', updated_at = ? WHERE id = ?").run(now(), input.exportId);
+      this.db.prepare(`INSERT INTO worker_receipts(job_id, receipt_key, input_hash, result_json, created_at)
+        VALUES (?, ?, ?, ?, ?)`).run(record.jobId, receiptKey, input.requestHash, JSON.stringify(input), now());
+    }).immediate();
   }
 
   async createExport(requestValue: unknown, context: WriteContext): Promise<{
@@ -428,7 +624,8 @@ export class OutputRepository {
   }
 
   get(exportId: string): ExportRecord {
-    const exportRow = this.db.prepare("SELECT * FROM exports WHERE id = ?").get(exportId);
+    const exportRow = this.db.prepare(`SELECT id, rendition_id, revision_id, format, options_json, status,
+      output_blob_hash, warning_json, created_at, updated_at FROM exports WHERE id = ?`).get(exportId);
     if (exportRow === undefined) {
       throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "导出记录不存在" });
     }
@@ -521,6 +718,65 @@ export class OutputRepository {
       formats: ["html_zip", "pdf", "project_bundle", "feishu_doc"],
       feishuConfigured: this.hasFeishuCredential(),
     });
+  }
+
+  htmlPreviewResource(exportId: string, path: string): { bytes: Buffer; mime: string } {
+    try { validateZipPath(path); } catch {
+      throw new ApiError({ statusCode: 422, code: "PATH_NOT_ALLOWED", message: "预览资源路径不安全" });
+    }
+    const record = this.get(exportId);
+    const artifact = record.artifacts.find((file) => file.kind === "html_zip");
+    if (record.format !== "html_zip" || record.status !== "succeeded" || artifact === undefined) {
+      throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "HTML 成品尚未登记" });
+    }
+    const bytes = readFileSync(this.artifactPath(exportId, artifact.id).path);
+    if (bytes.byteLength !== artifact.bytes || sha256Bytes(bytes) !== artifact.sha256) {
+      throw new ApiError({ statusCode: 422, code: "VALIDATION_ERROR", message: "HTML 成品文件校验失败" });
+    }
+    const warning = z.object({ warning_json: z.string() }).parse(
+      this.db.prepare("SELECT warning_json FROM exports WHERE id = ?").get(exportId));
+    const { manifestHash } = z.object({ manifestHash: z.string() }).parse(JSON.parse(warning.warning_json));
+    const resource = readOfflineHtml({ bytes, manifestHash, exportId, contentId: record.contentId,
+      renditionId: record.renditionId, revisionId: record.revisionId }).get(path);
+    if (resource === undefined) {
+      throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "资源不在本输出清单内" });
+    }
+    return resource;
+  }
+
+  async prepareCompletion(jobId: string, result: JobResult | null): Promise<void> {
+    if (result?.jobType !== "export_output") return;
+    if (this.db.inTransaction) throw new Error("输出文件准备不能在 SQLite 事务内执行");
+    const row = this.db.prepare("SELECT * FROM export_jobs WHERE job_id = ?").get(jobId);
+    if (row === undefined) return;
+    const mapping = ExportJobRowSchema.parse(row);
+    if (result.exportId !== mapping.export_id || result.format !== mapping.format) {
+      throw new Error("输出结果与原任务身份不匹配");
+    }
+    const workspace = within(join(this.dataRoot, "staging"), join(this.dataRoot, "staging", jobId));
+    const artifacts: z.infer<typeof ArtifactRowSchema>[] = [];
+    for (const file of result.files) {
+      const source = within(workspace, join(workspace, file.relativePath));
+      const bytes = readFileSync(source);
+      if (bytes.byteLength !== file.bytes || sha256Bytes(bytes) !== file.sha256) throw new Error("导出文件校验失败");
+      if (result.format === "html_zip" && file.relativePath === result.primaryFile) {
+        readOfflineHtml({ bytes, manifestHash: result.manifestHash, exportId: mapping.export_id,
+          contentId: mapping.content_id, renditionId: mapping.rendition_id, revisionId: mapping.revision_id });
+      }
+      const blob = await this.blobs.putBytes({ bytes, expectedSha256: file.sha256, mime: file.mime });
+      if (blob.deduped && sha256Bytes(readFileSync(join(this.dataRoot, blob.relativePath))) !== file.sha256) {
+        throw new Error("已有输出 blob 校验失败");
+      }
+      const destinationRelative = join("exports", mapping.export_id, `${file.sha256}-${safeFileName(file.fileName)}`);
+      const destination = within(this.dataRoot, join(this.dataRoot, destinationRelative));
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, bytes);
+      artifacts.push({ id: randomUUID(), kind: mapping.format === "pdf" ? "pdf"
+        : mapping.format === "html_zip" ? "html_zip" : "project_bundle",
+        file_name: safeFileName(file.fileName), mime: file.mime, bytes: file.bytes, sha256: file.sha256,
+        storage_relative_path: destinationRelative, created_at: now() });
+    }
+    this.preparedExports.set(jobId, { resultHash: sha256Bytes(JSON.stringify(result)), artifacts });
   }
 
   artifactPath(exportId: string, artifactId: string): {
@@ -858,11 +1114,35 @@ export class OutputRepository {
     }).immediate();
   }
 
+  retryExport(exportId: string) {
+    const record = this.get(exportId);
+    this.rejectLegacyCompositionAction(exportId);
+    if (record.status === "succeeded") return this.jobs.snapshotById(record.jobId);
+    if (record.format !== "feishu_doc") return this.jobs.prepareRetry(record.jobId);
+    const snapshot = this.jobs.snapshotById(record.jobId);
+    const unknown = this.db.prepare(`SELECT operation_id FROM remote_operations WHERE job_id = ?
+      AND kind = 'feishu_create_document' AND state IN ('dispatched', 'unknown') LIMIT 1`).get(record.jobId);
+    if (unknown !== undefined && (snapshot.checkpoint?.jobType !== "feishu_publish" || snapshot.checkpoint.documentId === null)) {
+      throw new ApiError({ statusCode: 409, code: "REMOTE_RESULT_UNKNOWN", message: "创建结果未知，不能重新创建飞书文档" });
+    }
+    if (snapshot.state === "waiting_input") return this.jobs.resume(record.jobId).snapshot;
+    return this.jobs.resumeOutput(record.jobId);
+  }
+
+  private rejectLegacyCompositionAction(exportId: string): void {
+    const row = z.object({ business_key: z.string().nullable() }).parse(
+      this.db.prepare("SELECT business_key FROM exports WHERE id = ?").get(exportId));
+    if (row.business_key !== null) {
+      throw new ApiError({ statusCode: 409, code: "JOB_NOT_RESUMABLE", message: "AI 创作交付必须通过原创作的恢复决策继续" });
+    }
+  }
+
   attachFeishu(exportId: string, decision: Exclude<OutputDecision, null>, context: WriteContext): {
     statusCode: number;
     response: unknown;
   } {
     return this.db.transaction(() => {
+      this.rejectLegacyCompositionAction(exportId);
       const job = this.db.prepare("SELECT job_id FROM export_jobs WHERE export_id = ?").get(exportId);
       if (job === undefined) {
         throw new ApiError({ statusCode: 404, code: "NOT_FOUND", message: "导出记录不存在" });
@@ -930,58 +1210,24 @@ export class OutputRepository {
         .run(now(), exportJob.export_id);
       return { state: "failed", result };
     }
-    const workspace = within(join(this.dataRoot, "staging"), join(this.dataRoot, "staging", jobId));
-    const exportDir = within(join(this.dataRoot, "exports"), join(this.dataRoot, "exports", exportJob.export_id));
-    mkdirSync(exportDir, { recursive: true });
-    const verified: Array<z.infer<typeof ArtifactRowSchema>> = [];
-    for (const file of result.files) {
-      const source = within(workspace, join(workspace, file.relativePath));
-      if (!existsSync(source)) throw new Error(`导出文件不存在: ${file.relativePath}`);
-      const actualHash = sha256Bytes(readFileSync(source));
-      const actualBytes = statSync(source).size;
-      if (actualHash !== file.sha256 || actualBytes !== file.bytes) {
-        throw new Error(`导出文件校验失败: ${file.relativePath}`);
-      }
-      const destinationRelative = join("exports", exportJob.export_id, safeFileName(file.fileName));
-      const destination = within(join(this.dataRoot, "exports"), join(this.dataRoot, destinationRelative));
-      mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(source, destination);
-      this.ensureBlobFromFile({
-        sha256: file.sha256,
-        mime: file.mime,
-        bytes: file.bytes,
-        sourcePath: source,
-      });
-      const kind = exportJob.format === "html_zip"
-        ? "html_zip"
-        : exportJob.format === "pdf"
-          ? "pdf"
-          : "project_bundle";
-      const existing = this.db.prepare(
-        "SELECT * FROM export_artifacts WHERE export_id = ? AND sha256 = ? AND file_name = ?",
-      ).get(exportJob.export_id, file.sha256, safeFileName(file.fileName));
-      if (existing !== undefined) {
-        verified.push(ArtifactRowSchema.parse(existing));
-        continue;
-      }
-      const artifact = {
-        id: randomUUID(),
-        kind,
-        file_name: safeFileName(file.fileName),
-        mime: file.mime,
-        bytes: file.bytes,
-        sha256: file.sha256,
-        storage_relative_path: destinationRelative.split("\\").join("/"),
-        created_at: now(),
-      } satisfies z.infer<typeof ArtifactRowSchema>;
-      this.db.prepare(
-        `INSERT INTO export_artifacts
-          (id, export_id, kind, file_name, mime, bytes, sha256, storage_relative_path, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(artifact.id, exportJob.export_id, artifact.kind, artifact.file_name, artifact.mime, artifact.bytes, artifact.sha256, artifact.storage_relative_path, artifact.created_at);
-      verified.push(artifact);
+    const prepared = this.preparedExports.get(jobId);
+    if (prepared === undefined || prepared.resultHash !== sha256Bytes(JSON.stringify(result))) {
+      throw new Error("输出结果必须先在事务外调用 prepareCompletion 核验并准备");
     }
-    const primary = result.files.find((file) => file.relativePath === result.primaryFile) ?? result.files[0];
+    for (const artifact of prepared.artifacts) {
+      this.db.prepare(`INSERT INTO blobs(sha256, bytes, mime, relative_path, created_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING`)
+        .run(artifact.sha256, artifact.bytes, artifact.mime, this.blobs.relativePathForHash(artifact.sha256), now());
+      const existing = this.db.prepare("SELECT id FROM export_artifacts WHERE export_id = ? AND sha256 = ? AND file_name = ?")
+        .get(exportJob.export_id, artifact.sha256, artifact.file_name);
+      if (existing !== undefined) continue;
+      this.db.prepare(`INSERT INTO export_artifacts
+        (id, export_id, kind, file_name, mime, bytes, sha256, storage_relative_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(artifact.id, exportJob.export_id, artifact.kind, artifact.file_name, artifact.mime,
+          artifact.bytes, artifact.sha256, artifact.storage_relative_path, artifact.created_at);
+    }
+    const primary = result.files.find((file) => file.relativePath === result.primaryFile);
     if (primary === undefined) throw new Error("导出结果没有主文件");
     this.db.prepare(
       `UPDATE exports SET status = ?, output_blob_hash = ?, warning_json = ?, updated_at = ?
@@ -997,6 +1243,7 @@ export class OutputRepository {
       now(),
       exportJob.export_id,
     );
+    this.preparedExports.delete(jobId);
     return { state, result };
   }
 
@@ -1067,10 +1314,12 @@ export class OutputRepository {
           result.documentUrl, JSON.stringify(result.blockMap), JSON.stringify(result.mediaMap), now(), now(),
         );
       }
+      const verifiedState = result.warnings.some((warning) => warning.code === "FEISHU_READBACK_MISMATCH")
+        ? "partial" : state;
       this.db.prepare(
         "UPDATE exports SET status = ?, warning_json = ?, updated_at = ? WHERE id = ?",
-      ).run(state, JSON.stringify({ warnings: result.warnings }), now(), exportJob.export_id);
-      return { state, result };
+      ).run(verifiedState, JSON.stringify({ warnings: result.warnings }), now(), exportJob.export_id);
+      return { state: verifiedState, result };
     }
     this.db.prepare("UPDATE exports SET status = ?, updated_at = ? WHERE id = ?")
       .run(state, now(), exportJob.export_id);
@@ -1259,23 +1508,6 @@ export class OutputRepository {
       downloadUrl: `/api/v1/exports/${exportId}/artifacts/${row.id}/download`,
       createdAt: row.created_at,
     };
-  }
-
-  private ensureBlobFromFile(input: {
-    sha256: string;
-    mime: string;
-    bytes: number;
-    sourcePath: string;
-  }): void {
-    const exists = this.db.prepare("SELECT 1 FROM blobs WHERE sha256 = ?").get(input.sha256);
-    if (exists !== undefined) return;
-    const relative = join("blobs", "sha256", input.sha256.slice(0, 2), input.sha256);
-    const destination = join(this.dataRoot, relative);
-    mkdirSync(dirname(destination), { recursive: true });
-    if (!existsSync(destination)) copyFileSync(input.sourcePath, destination);
-    this.db.prepare(
-      "INSERT INTO blobs(sha256, relative_path, mime, bytes, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(input.sha256, relative.split("\\").join("/"), input.mime, input.bytes, now());
   }
 
   private ensureBlobFromBytes(input: {

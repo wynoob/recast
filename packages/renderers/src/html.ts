@@ -336,7 +336,7 @@ const BASE_CSS = `
   }
 `;
 
-const DECK_SCRIPT = `
+export const DECK_SCRIPT = `
 (() => {
   const slides = Array.from(document.querySelectorAll('.slide'));
   if (!slides.length) return;
@@ -351,7 +351,7 @@ const DECK_SCRIPT = `
     });
     notes.forEach((note, index) => note.hidden = index !== current || document.body.dataset.notesState !== 'on');
     if (count) count.textContent = String(current + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
-    if (location.hash !== '#slide-' + (current + 1)) history.replaceState(null, '', '#slide-' + (current + 1));
+    if (location.hash !== '#slide-' + (current + 1)) location.replace('#slide-' + (current + 1));
   };
   document.querySelector('[data-prev]')?.addEventListener('click', () => update(current - 1));
   document.querySelector('[data-next]')?.addEventListener('click', () => update(current + 1));

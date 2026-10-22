@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { DECK_SCRIPT } from "@dmall/renderers";
 import {
   AcceptPullRequestSchema,
   CreateExportRequestSchema,
@@ -39,7 +41,7 @@ export function registerOutputRoutes(input: {
   idempotency: IdempotencyRepository;
   jobs: JobRepository;
 }): void {
-  const { app, outputs, idempotency, jobs } = input;
+  const { app, outputs, idempotency } = input;
 
   app.post("/api/v1/exports", async (request, reply) => {
     const body = CreateExportRequestSchema.parse(request.body);
@@ -101,6 +103,17 @@ export function registerOutputRoutes(input: {
     };
   });
 
+  app.get("/api/v1/exports/:id/preview/*", async (request, reply) => {
+    const params = z.strictObject({ id: z.uuid(), "*": z.string().min(1) }).parse(request.params);
+    const resource = outputs.htmlPreviewResource(params.id, params["*"]);
+    reply.header("content-type", resource.mime);
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("cache-control", "no-store");
+    const scriptHash = createHash("sha256").update(DECK_SCRIPT).digest("base64");
+    reply.header("content-security-policy", `default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-${scriptHash}'; font-src 'self'; base-uri 'none'; frame-ancestors 'self'; sandbox allow-scripts`);
+    return reply.send(resource.bytes);
+  });
+
   app.get("/api/v1/exports/:id", async (request) => {
     const id = UuidParamsSchema.parse(request.params).id;
     return { data: outputs.get(id), requestId: requestIdFor(request) };
@@ -121,8 +134,7 @@ export function registerOutputRoutes(input: {
     const id = UuidParamsSchema.parse(request.params).id;
     const requestId = requestIdFor(request);
     const context = writeContext(request, idempotency, requestId, `/api/v1/exports/${id}/retry`, { id });
-    const record = outputs.get(id);
-    const snapshot = jobs.prepareRetry(record.jobId);
+    const snapshot = outputs.retryExport(id);
     const response = { data: snapshot, requestId };
     idempotency.save({
       routeScope: context.routeScope,
