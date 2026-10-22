@@ -60,7 +60,8 @@ test("settings maps every localImport state to product actions", async ({ page, 
       await expect(action.getByText("可用", { exact: true })).toBeVisible();
     }
     await expect(dialog.getByText("编辑素材标题与标签")).toBeVisible();
-    await expect(dialog.getByText("未开放", { exact: true }).first()).toBeVisible();
+    const templates = dialog.locator(".status-row", { hasText: "模板编辑与真实验证" });
+    await expect(templates.getByText(settingsResponse.data.features.templates === "not_implemented_t05" ? "未开放" : "可用", { exact: true })).toBeVisible();
     const text = await dialog.innerText();
     for (const term of forbidden) expect(text).not.toContain(term);
     await page.keyboard.press("Escape");

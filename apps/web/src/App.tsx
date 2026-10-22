@@ -207,7 +207,7 @@ function SettingsDrawer({ csrfToken, onClose }: { csrfToken: string | undefined;
               value={data.features.templates === "not_implemented_t05" ? "未开放" : "可用"}
               tone={data.features.templates === "not_implemented_t05" ? "muted" : "good"}
             />
-            <StatusRow label="完整编辑器" value={data.features.editor === "not_implemented_t06" ? "未开放" : "可用"} />
+            <StatusRow label="AI 创作与只读历史" value={data.features.editor === "not_implemented_t06" ? "未开放" : "可用"} />
             <StatusRow label="飞书与 HTML 输出" value={data.features.outputs === "not_implemented_t07" ? "未开放" : "可用"} />
           </section>
         </>
