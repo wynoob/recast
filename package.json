@@ -1,0 +1,62 @@
+{
+  "name": "dmall-content-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": "24.22.0",
+    "pnpm": "10.34.7"
+  },
+  "scripts": {
+    "bootstrap": "./scripts/with-runtime.sh node scripts/bootstrap-runtime.mjs",
+    "dev": "./scripts/with-runtime.sh node scripts/dev.mjs",
+    "build": "./scripts/with-runtime.sh node scripts/build.mjs",
+    "start": "./scripts/with-runtime.sh node dist/apps/server/main.js",
+    "check": "./scripts/with-runtime.sh node scripts/check.mjs",
+    "test": "./scripts/with-runtime.sh node scripts/test.mjs",
+    "test:e2e": "./scripts/with-runtime.sh node scripts/e2e.mjs",
+    "verify:t01": "./scripts/with-runtime.sh node scripts/verify-t01.mjs",
+    "verify:t02a": "./scripts/with-runtime.sh node scripts/verify-t02a.mjs",
+    "verify:t03-t04": "./scripts/with-runtime.sh node scripts/verify-t03-t04-business.mjs",
+    "verify:t05-product": "./scripts/with-runtime.sh node scripts/verify-t05-product.mjs",
+    "backend-check": "./scripts/with-runtime.sh node scripts/backend-check.mjs",
+    "backend-build": "./scripts/with-runtime.sh node scripts/backend-check.mjs"
+  },
+  "dependencies": {
+    "@dmall/contracts": "workspace:*",
+    "@dmall/domain": "workspace:*",
+    "@dmall/local-adapters": "workspace:*",
+    "@dmall/search": "workspace:*",
+    "@dmall/renderers": "workspace:*",
+    "@dmall/storage": "workspace:*",
+    "@dmall/templates": "workspace:*",
+    "@fastify/multipart": "10.1.4",
+    "@fastify/static": "10.1.6",
+    "@tanstack/react-query": "5.104.5",
+    "better-sqlite3": "12.11.1",
+    "fastify": "5.12.7",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router": "7.18.4",
+    "sharp": "0.35.5",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "4.1.12"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "sharp"
+    ]
+  }
+}

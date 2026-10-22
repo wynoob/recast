@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="g" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#0d0b1f"/>
+      <stop offset="1" stop-color="#30256a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#g)"/>
+  <g stroke="#7560c8" stroke-opacity=".35">
+    <path d="M120 720H1480M120 600H1480M120 480H1480M120 360H1480"/>
+  </g>
+  <polyline points="150,690 370,610 590,640 810,430 1030,470 1250,290 1450,330" fill="none" stroke="#5ee0a8" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#6d3fe0" stroke="#f7f4ff" stroke-width="5">
+    <circle cx="370" cy="610" r="16"/><circle cx="810" cy="430" r="16"/><circle cx="1250" cy="290" r="16"/>
+  </g>
+  <text x="120" y="150" fill="#f7f4ff" font-family="PingFang SC, sans-serif" font-size="64" font-weight="700">合成示意媒体 B</text>
+  <text x="120" y="210" fill="#c9c2e8" font-family="PingFang SC, sans-serif" font-size="26">趋势占位图 · 数值不可用于业务判断</text>
+  <text x="120" y="820" fill="#f3bf68" font-family="PingFang SC, sans-serif" font-size="22">SYNTHETIC / 合成示意</text>
+</svg>

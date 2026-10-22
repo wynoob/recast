@@ -1,0 +1,17 @@
+{
+  "name": "@dmall/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@dmall/contracts": "workspace:*",
+    "@dmall/local-adapters": "workspace:*",
+    "@dmall/search": "workspace:*",
+    "@dmall/templates": "workspace:*",
+    "@dmall/renderers": "workspace:*",
+    "@playwright/test": "1.64.1",
+    "sharp": "0.35.5",
+    "zod": "4.6.7",
+    "@dmall/storage": "workspace:*"
+  }
+}

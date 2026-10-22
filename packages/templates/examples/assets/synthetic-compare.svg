@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <rect width="1600" height="900" fill="#0d0b1f"/>
+  <g>
+    <rect x="90" y="120" width="660" height="660" rx="32" fill="#241c50" stroke="#7560c8"/>
+    <rect x="850" y="120" width="660" height="660" rx="32" fill="#30256a" stroke="#8b72ff"/>
+    <circle cx="300" cy="330" r="110" fill="#7560c8" fill-opacity=".32"/>
+    <circle cx="1060" cy="330" r="110" fill="#5ee0a8" fill-opacity=".24"/>
+    <text x="150" y="520" fill="#f7f4ff" font-family="PingFang SC, sans-serif" font-size="42" font-weight="700">现状</text>
+    <text x="910" y="520" fill="#f7f4ff" font-family="PingFang SC, sans-serif" font-size="42" font-weight="700">目标</text>
+    <text x="150" y="580" fill="#c9c2e8" font-family="PingFang SC, sans-serif" font-size="24">合成示意对照</text>
+    <text x="910" y="580" fill="#c9c2e8" font-family="PingFang SC, sans-serif" font-size="24">合成示意对照</text>
+  </g>
+  <text x="90" y="850" fill="#f3bf68" font-family="PingFang SC, sans-serif" font-size="22">SYNTHETIC / 合成示意</text>
+</svg>

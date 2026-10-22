@@ -1,0 +1,21 @@
+{
+  "name": "@dmall/local-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@dmall/contracts": "workspace:*",
+    "cheerio": "1.2.0",
+    "domhandler": "5.0.3",
+    "fast-xml-parser": "5.11.2",
+    "fflate": "0.8.3",
+    "pdfjs-dist": "6.4.299",
+    "zod": "4.6.7"
+  }
+}

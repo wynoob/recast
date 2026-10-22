@@ -1,0 +1,203 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-21T13:31:41.567Z",
+  "sampleDataLabel": "合成示意 · 非真实材料",
+  "entries": [
+    {
+      "artifactId": "feishu_doc:product-intro",
+      "kind": "feishu_doc",
+      "narrativeId": "product-intro",
+      "label": "客户产品介绍文档",
+      "summary": "从经营问题进入产品定位，再展示场景、价值和边界。",
+      "file": "doc-product-intro.html",
+      "artifactHash": "42578ee00cccd01e29c49f3050051679432dee815219442e56920c7bd3708db3",
+      "rendererVersion": "docx-1",
+      "templateVersionId": "b5e287a3-3194-51e6-8e8e-068b9bab515e",
+      "resourcePaths": [
+        "assets/synthetic-compare.svg",
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "html_deck:product-intro",
+      "kind": "html_deck",
+      "narrativeId": "product-intro",
+      "label": "客户产品介绍演示",
+      "summary": "从经营问题进入产品定位，再展示场景、价值和边界。",
+      "file": "deck-product-intro.html",
+      "artifactHash": "05eab5ead9f551b59420195cafe693379634ded3e9a8343f2ba3be2a0b6502a3",
+      "rendererVersion": "deck-1",
+      "templateVersionId": "355a53f3-2afe-5af1-b3dd-b15f141eaa68",
+      "resourcePaths": [
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "feishu_doc:executive-progress",
+      "kind": "feishu_doc",
+      "narrativeId": "executive-progress",
+      "label": "管理层进展汇报文档",
+      "summary": "先给结论，再用证据、案例、风险和计划支撑。",
+      "file": "doc-executive-progress.html",
+      "artifactHash": "ea4aee9d3b710aea58ce41403a36859244d658d87a6c1ecb64b5043f62c8561d",
+      "rendererVersion": "docx-1",
+      "templateVersionId": "869ac6f0-879b-5600-b273-f5bb187623b6",
+      "resourcePaths": [
+        "assets/synthetic-compare.svg",
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "html_deck:executive-progress",
+      "kind": "html_deck",
+      "narrativeId": "executive-progress",
+      "label": "管理层进展汇报演示",
+      "summary": "先给结论，再用证据、案例、风险和计划支撑。",
+      "file": "deck-executive-progress.html",
+      "artifactHash": "db0f991daf2c5cceffa9c01eac1a32107f3d07bda36e82057e13d3bb2b6fc75f",
+      "rendererVersion": "deck-1",
+      "templateVersionId": "ad614b4b-f949-5447-85a4-0792eda40fcb",
+      "resourcePaths": [
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "feishu_doc:phase-review",
+      "kind": "feishu_doc",
+      "narrativeId": "phase-review",
+      "label": "阶段成果复盘文档",
+      "summary": "按目标、交付、采用、证据、差距、行动复盘阶段成果。",
+      "file": "doc-phase-review.html",
+      "artifactHash": "b30d817fef23f6c2df6c4b80055487e439db989f4482e91936b8be165484b25d",
+      "rendererVersion": "docx-1",
+      "templateVersionId": "35356f5a-000a-5413-8d16-cc3ae697ef6f",
+      "resourcePaths": [
+        "assets/synthetic-compare.svg",
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "html_deck:phase-review",
+      "kind": "html_deck",
+      "narrativeId": "phase-review",
+      "label": "阶段成果复盘演示",
+      "summary": "按目标、交付、采用、证据、差距、行动复盘阶段成果。",
+      "file": "deck-phase-review.html",
+      "artifactHash": "887e615fd86b41ab1dfe09ee76e58dfb22fcc1495c56529ff8ce5ad441581775",
+      "rendererVersion": "deck-1",
+      "templateVersionId": "bdca1b4b-8f8c-5b74-a106-6537e3a9daff",
+      "resourcePaths": [
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "feishu_doc:merchant-solution",
+      "kind": "feishu_doc",
+      "narrativeId": "merchant-solution",
+      "label": "商家解决方案文档",
+      "summary": "从商家现状进入方案演示，再落到实施和验收。",
+      "file": "doc-merchant-solution.html",
+      "artifactHash": "658915a7ab6756aa1f9a29c9abb9c6140e32e53c655de1dc82505997273ed647",
+      "rendererVersion": "docx-1",
+      "templateVersionId": "e1ac6e83-e6b5-5524-9974-7fc948dd4175",
+      "resourcePaths": [
+        "assets/synthetic-compare.svg",
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "html_deck:merchant-solution",
+      "kind": "html_deck",
+      "narrativeId": "merchant-solution",
+      "label": "商家解决方案演示",
+      "summary": "从商家现状进入方案演示，再落到实施和验收。",
+      "file": "deck-merchant-solution.html",
+      "artifactHash": "ecba6c4bae528830287995e6d252c8f55a8a94ea0076421761c2b3d4c49a2399",
+      "rendererVersion": "deck-1",
+      "templateVersionId": "59f5f668-bc26-58fd-9035-4450d6f7e1ef",
+      "resourcePaths": [
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "feishu_doc:internal-sharing",
+      "kind": "feishu_doc",
+      "narrativeId": "internal-sharing",
+      "label": "内部分享文档",
+      "summary": "从问题、机制、实例和经验展开，最后收集讨论。",
+      "file": "doc-internal-sharing.html",
+      "artifactHash": "5ef2a19c6cbed213d71de7bc2489a604aa3fbb39781a095361901212aeb385f7",
+      "rendererVersion": "docx-1",
+      "templateVersionId": "011cfdde-fa7e-5071-ae0f-edb1f7eeb91a",
+      "resourcePaths": [
+        "assets/synthetic-compare.svg",
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "html_deck:internal-sharing",
+      "kind": "html_deck",
+      "narrativeId": "internal-sharing",
+      "label": "内部分享演示",
+      "summary": "从问题、机制、实例和经验展开，最后收集讨论。",
+      "file": "deck-internal-sharing.html",
+      "artifactHash": "034a17686fb900d0f20c4997714196d57d62e4e6400fc7bcf04967c4cd8bcadb",
+      "rendererVersion": "deck-1",
+      "templateVersionId": "d2d312c1-9df2-5c9a-94fd-aff17df5c159",
+      "resourcePaths": [
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "feishu_doc:training",
+      "kind": "feishu_doc",
+      "narrativeId": "training",
+      "label": "用户培训文档",
+      "summary": "按入口、基础提问、连续任务、注意事项和练习组织培训。",
+      "file": "doc-training.html",
+      "artifactHash": "378b713122a2b17272332479bced97831ad6890da65ef356665236ade9341c89",
+      "rendererVersion": "docx-1",
+      "templateVersionId": "12a5aaf9-ec0e-56b9-84d9-2247fb07d072",
+      "resourcePaths": [
+        "assets/synthetic-compare.svg",
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    },
+    {
+      "artifactId": "html_deck:training",
+      "kind": "html_deck",
+      "narrativeId": "training",
+      "label": "用户培训演示",
+      "summary": "按入口、基础提问、连续任务、注意事项和练习组织培训。",
+      "file": "deck-training.html",
+      "artifactHash": "adfabab1d329cfec3132160d50b172db2d98ae98bdb1cf9938e4776db3de0901",
+      "rendererVersion": "deck-1",
+      "templateVersionId": "a7935974-ad65-5a5f-ba57-1080897e20e5",
+      "resourcePaths": [
+        "assets/synthetic-evidence.svg",
+        "assets/synthetic-flow.svg"
+      ]
+    }
+  ],
+  "negatives": {
+    "overflow": {
+      "file": "negative-overflow.html",
+      "expected": "print overflow detected"
+    },
+    "missing": {
+      "file": "negative-missing.html",
+      "expected": "missing resource detected"
+    }
+  }
+}

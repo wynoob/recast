@@ -1,0 +1,12 @@
+node_modules/
+input/
+dist/
+.tools/
+coverage/
+playwright-report/
+test-results/
+*.log
+.DS_Store
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

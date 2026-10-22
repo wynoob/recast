@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/domain" },
+    { "path": "packages/storage" },
+    { "path": "packages/templates" },
+    { "path": "packages/local-adapters" },
+    { "path": "packages/search" },
+    { "path": "packages/renderers" },
+    { "path": "apps/server" },
+    { "path": "apps/worker" }
+  ]
+}

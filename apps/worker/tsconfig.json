@@ -1,0 +1,31 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "../../dist/apps/worker",
+    "tsBuildInfoFile": "../../dist/apps/worker/.tsbuildinfo"
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../packages/local-adapters"
+    },
+    {
+      "path": "../../packages/search"
+    },
+    {
+      "path": "../../packages/templates"
+    },
+    {
+      "path": "../../packages/storage"
+    },
+    {
+      "path": "../../packages/renderers"
+    }
+  ]
+}

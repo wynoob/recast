@@ -1,0 +1,17 @@
+{
+  "name": "@dmall/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@dmall/contracts": "workspace:*",
+    "@dmall/domain": "workspace:*",
+    "@dmall/search": "workspace:*",
+    "@dmall/renderers": "workspace:*",
+    "@dmall/templates": "workspace:*",
+    "@dmall/storage": "workspace:*",
+    "@fastify/static": "10.1.6",
+    "fastify": "5.12.7",
+    "zod": "4.6.7"
+  }
+}
