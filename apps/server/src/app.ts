@@ -22,7 +22,7 @@ import { loadConfig, type RuntimeConfig } from "./config.js";
 import { ApiError, requestIdFor, sendApiError } from "./errors.js";
 import { SessionService, type SessionView } from "./session.js";
 import { IdempotencyRepository, type IdempotencyRecord } from "./idempotency.js";
-import { ContentRepository, parseCreateContent, parseUpdateContent } from "./content-repository.js";
+import { ContentRepository, parseUpdateContent } from "./content-repository.js";
 import { LibraryRepository } from "./library-repository.js";
 import { JobRepository } from "./job-repository.js";
 import { JobEventBus } from "./event-bus.js";
@@ -586,28 +586,6 @@ function registerRoutes(input: {
     const id = parseId(request.params);
     const detail = contents.getById(id);
     return reply.send({ data: detail, requestId: requestIdFor(request) });
-  });
-
-  app.post("/api/v1/contents", async (request, reply) => {
-    const body = parseCreateContent(request.body);
-    const key = idempotency.requireKey(request.headers["idempotency-key"]);
-    const scope = routeScope(request, "/api/v1/contents");
-    const hash = idempotency.requestHash(body);
-    const existing = idempotency.find(scope, key);
-    if (existing !== null) return replay(reply, existing, hash);
-    try {
-      const detail = contents.create(body, {
-        routeScope: scope,
-        key,
-        requestHash: hash,
-        requestId: requestIdFor(request),
-      });
-      return reply.code(201).send({ data: detail, requestId: requestIdFor(request) });
-    } catch (error) {
-      const raced = idempotency.find(scope, key);
-      if (raced !== null) return replay(reply, raced, hash);
-      throw error;
-    }
   });
 
   app.patch("/api/v1/contents/:id", async (request, reply) => {

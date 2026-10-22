@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { expect, it } from "vitest";
-import { z } from "zod";
-import { ContentDetailSchema } from "@dmall/contracts";
+import { CreateContentRequestSchema } from "@dmall/contracts";
+import { ContentRepository } from "../../apps/server/src/content-repository.js";
+import { IdempotencyRepository } from "../../apps/server/src/idempotency.js";
 import { startT02cApp } from "./t02c-test-helpers.js";
 
-it("retires the old public writing chain while keeping metadata creation, history and provider management", async () => {
+it("retires the old public writing chain including blank creation while keeping history and provider management", async () => {
   const app = await startT02cApp();
   try {
-    const content = z.object({ data: ContentDetailSchema }).parse(await app.writeJson("POST", "/api/v1/contents", { schemaVersion: 1, title: "历史内容", kind: "feishu_doc" })).data;
+    const idempotency = new IdempotencyRepository(app.context.database.db);
+    const body = CreateContentRequestSchema.parse({ schemaVersion: 1, title: "历史内容", kind: "feishu_doc" });
+    const content = new ContentRepository(app.context.database.db, idempotency).create(body, {
+      routeScope: "history-fixture", key: randomUUID(), requestHash: idempotency.requestHash(body), requestId: randomUUID(),
+    });
     const rendition = content.renditions[0]!;
     const candidateId = randomUUID();
     const paths = [
+      "/api/v1/contents",
       `/api/v1/renditions/${rendition.id}/revisions`, `/api/v1/renditions/${rendition.id}/restore`,
       `/api/v1/renditions/${rendition.id}/generation-inputs`, `/api/v1/renditions/${rendition.id}/local-generation`,
       `/api/v1/renditions/${rendition.id}/candidates`, `/api/v1/candidates/${candidateId}/accept`, `/api/v1/candidates/${candidateId}/reject`,

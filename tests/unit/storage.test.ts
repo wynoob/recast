@@ -67,7 +67,7 @@ describe("SQLite migrations", () => {
         journalMode: "wal",
         foreignKeys: true,
         busyTimeoutMs: 5_000,
-        migrationCount: 9,
+        migrationCount: 10,
       });
       const tables = z
         .array(z.strictObject({ name: z.string() }))

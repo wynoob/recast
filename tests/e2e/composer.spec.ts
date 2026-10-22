@@ -89,6 +89,7 @@ test.describe("Composer 前端契约夹具", () => {
     await page.getByLabel("补充或调整要求").fill("盘点周期为每周一次");
     await page.getByRole("button", { name: "按调整重新规划" }).click();
     await expect.poll(() => adjustment).toEqual({ mode: "adjust", contentId, expectedVersion: 1, instruction: "盘点周期为每周一次", choices: { selection: { includeHandles: [], excludeEvidenceIds: [evidenceId] } } });
+    await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), `dcw.composer.selection.${contentId}`)).not.toBeNull();
     await page.reload();
     await expect(page.getByLabel(/盘点现场图/)).not.toBeChecked();
   });

@@ -19,8 +19,8 @@ describe("T02c migration 004", () => {
       backupDir: join(root, "backups"),
     });
     try {
-      expect(opened.appliedMigrations).toHaveLength(9);
-      expect(opened.info.migrationCount).toBe(9);
+      expect(opened.appliedMigrations).toHaveLength(10);
+      expect(opened.info.migrationCount).toBe(10);
       const table = opened.db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'asset_map_entries'")
         .get();
@@ -88,6 +88,7 @@ describe("T02c migration 004", () => {
         "007_t03_t04_document_search",
         "008_t05_template_validation",
         "009_t07_outputs",
+        "010_authoring_composition",
       ]);
       expect(upgraded.backupPath).not.toBeNull();
       expect(upgraded.db.prepare("SELECT * FROM sources").all()).toEqual(before.sources);

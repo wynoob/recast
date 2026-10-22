@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
+import { CreateContentRequestSchema } from "@dmall/contracts";
+import { ContentRepository } from "../../apps/server/src/content-repository.js";
+import { IdempotencyRepository } from "../../apps/server/src/idempotency.js";
 import { createApp } from "../../apps/server/src/app.js";
 import { loadConfig } from "../../apps/server/src/config.js";
 
@@ -44,98 +47,53 @@ afterEach(async () => {
 });
 
 describe("local API boundaries", () => {
-  it("creates, lists and reopens a blank content without a model", async () => {
+  it("retires blank creation while listing and reopening historical content", async () => {
     const { context } = await testApp();
     try {
       const auth = await session(context.app);
-      const empty = await context.app.inject({
-        method: "GET",
-        url: "/api/v1/contents",
-        headers: { host: "127.0.0.1:4318", cookie: auth.cookie },
-      });
-      expect((JSON.parse(empty.body) as { data: { total: number } }).data.total).toBe(0);
-      const body = {
-        schemaVersion: 1,
-        title: "空库第一份内容",
-        kind: "feishu_doc",
-      };
-      const created = await context.app.inject({
-        method: "POST",
-        url: "/api/v1/contents",
-        headers: {
-          host: "127.0.0.1:4318",
-          cookie: auth.cookie,
-          "x-csrf-token": auth.csrfToken,
-          "idempotency-key": randomUUID(),
-        },
-        payload: body,
-      });
-      expect(created.statusCode).toBe(201);
-      const createdBody = JSON.parse(created.body) as {
-        data: { id: string; renditions: Array<{ currentRevisionId: string; revision: { ast: { sections: unknown[] } } }> };
-      };
-      expect(createdBody.data.renditions).toHaveLength(1);
-      expect(createdBody.data.renditions[0]?.revision.ast.sections).toEqual([]);
-
-      const list = await context.app.inject({
-        method: "GET",
-        url: "/api/v1/contents",
-        headers: { host: "127.0.0.1:4318" },
-      });
+      const headers = { host: "127.0.0.1:4318", cookie: auth.cookie };
+      const empty = await context.app.inject({ method: "GET", url: "/api/v1/contents", headers });
+      expect(JSON.parse(empty.body).data.total).toBe(0);
+      const body = CreateContentRequestSchema.parse({ schemaVersion: 1, title: "历史内容", kind: "feishu_doc" });
+      const retired = await context.app.inject({ method: "POST", url: "/api/v1/contents",
+        headers: { ...headers, "x-csrf-token": auth.csrfToken, "idempotency-key": randomUUID() }, payload: body });
+      expect(retired.statusCode).toBe(404);
+      expect(context.database.db.prepare("SELECT COUNT(*) AS n FROM contents").get()).toEqual({ n: 0 });
+      const idempotency = new IdempotencyRepository(context.database.db);
+      const repository = new ContentRepository(context.database.db, idempotency);
+      const historical = repository.create(body, { routeScope: "historical-fixture", key: randomUUID(),
+        requestHash: idempotency.requestHash(body), requestId: randomUUID() });
+      const list = await context.app.inject({ method: "GET", url: "/api/v1/contents", headers });
       expect(list.statusCode).toBe(200);
-      const listBody = JSON.parse(list.body) as { data: { total: number; items: Array<{ title: string }> } };
-      expect(listBody.data.total).toBe(1);
-      expect(listBody.data.items[0]?.title).toBe("空库第一份内容");
-
-      const detail = await context.app.inject({
-        method: "GET",
-        url: `/api/v1/contents/${createdBody.data.id}`,
-        headers: { host: "127.0.0.1:4318" },
-      });
+      expect(JSON.parse(list.body).data).toMatchObject({ total: 1, items: [{ title: "历史内容" }] });
+      const detail = await context.app.inject({ method: "GET", url: `/api/v1/contents/${historical.id}`, headers });
       expect(detail.statusCode).toBe(200);
-    } finally {
-      await context.app.close();
-    }
+      expect(JSON.parse(detail.body).data.id).toBe(historical.id);
+    } finally { await context.app.close(); }
   });
 
-  it("replays the same key and rejects a different body", async () => {
+  it("replays Composer submissions and rejects a different body under the same key", async () => {
     const { context } = await testApp();
     try {
+      const stamp = new Date().toISOString();
+      context.database.db.prepare(`INSERT INTO provider_configs
+        (id, role, base_url, model_id, capabilities_json, keychain_ref, created_at, updated_at)
+        VALUES (?, 'text', 'http://127.0.0.1:1/v1', 'boundary-fixture', '{"verified":true}', 'BOUNDARY_TEST_KEY', ?, ?)`)
+        .run(randomUUID(), stamp, stamp);
       const auth = await session(context.app);
-      const key = randomUUID();
-      const headers = {
-        host: "127.0.0.1:4318",
-        cookie: auth.cookie,
-        "x-csrf-token": auth.csrfToken,
-        "idempotency-key": key,
-      };
-      const first = await context.app.inject({
-        method: "POST",
-        url: "/api/v1/contents",
-        headers,
-        payload: { schemaVersion: 1, title: "幂等内容", kind: "html_deck" },
-      });
-      const replay = await context.app.inject({
-        method: "POST",
-        url: "/api/v1/contents",
-        headers,
-        payload: { schemaVersion: 1, title: "幂等内容", kind: "html_deck" },
-      });
-      expect(first.statusCode).toBe(201);
+      const headers = { host: "127.0.0.1:4318", cookie: auth.cookie,
+        "x-csrf-token": auth.csrfToken, "idempotency-key": randomUUID() };
+      const payload = { mode: "create", idea: "幂等创作", delivery: { kind: "html_deck" } };
+      const first = await context.app.inject({ method: "POST", url: "/api/v1/compositions/submit", headers, payload });
+      expect(first.statusCode).toBe(202);
+      const replay = await context.app.inject({ method: "POST", url: "/api/v1/compositions/submit", headers, payload });
       expect(replay.body).toBe(first.body);
-      const conflict = await context.app.inject({
-        method: "POST",
-        url: "/api/v1/contents",
-        headers,
-        payload: { schemaVersion: 1, title: "不同内容", kind: "html_deck" },
-      });
+      const conflict = await context.app.inject({ method: "POST", url: "/api/v1/compositions/submit", headers,
+        payload: { ...payload, idea: "不同创作" } });
       expect(conflict.statusCode).toBe(409);
-      expect((JSON.parse(conflict.body) as { error: { code: string } }).error.code).toBe(
-        "IDEMPOTENCY_CONFLICT",
-      );
-    } finally {
-      await context.app.close();
-    }
+      expect(JSON.parse(conflict.body).error.code).toBe("IDEMPOTENCY_CONFLICT");
+      expect(context.database.db.prepare("SELECT COUNT(*) AS n FROM contents").get()).toEqual({ n: 1 });
+    } finally { await context.app.close(); }
   });
 
   it("rejects foreign Host, missing CSRF and missing idempotency keys", async () => {
@@ -149,10 +107,10 @@ describe("local API boundaries", () => {
       expect(foreign.statusCode).toBe(403);
 
       const auth = await session(context.app);
-      const body = { schemaVersion: 1, title: "测试", kind: "feishu_doc" };
+      const body = { mode: "create", idea: "测试", delivery: { kind: "html_deck" } };
       const noCsrf = await context.app.inject({
         method: "POST",
-        url: "/api/v1/contents",
+        url: "/api/v1/compositions/submit",
         headers: {
           host: "127.0.0.1:4318",
           cookie: auth.cookie,
@@ -164,7 +122,7 @@ describe("local API boundaries", () => {
 
       const noKey = await context.app.inject({
         method: "POST",
-        url: "/api/v1/contents",
+        url: "/api/v1/compositions/submit",
         headers: {
           host: "127.0.0.1:4318",
           cookie: auth.cookie,
@@ -176,7 +134,7 @@ describe("local API boundaries", () => {
 
       const badOrigin = await context.app.inject({
         method: "POST",
-        url: "/api/v1/contents",
+        url: "/api/v1/compositions/submit",
         headers: {
           host: "127.0.0.1:4318",
           origin: "http://evil.example:4318",

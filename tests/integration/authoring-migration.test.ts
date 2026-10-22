@@ -35,8 +35,9 @@ describe("T06 authoring migration 005 and T05 migration 008", () => {
         "007_t03_t04_document_search",
         "008_t05_template_validation",
         "009_t07_outputs",
+        "010_authoring_composition",
       ]);
-      expect(opened.info.migrationCount).toBe(9);
+      expect(opened.info.migrationCount).toBe(10);
       const tables = opened.db.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       ).all().map((row) => String((row as { name: string }).name));
@@ -87,6 +88,7 @@ describe("T06 authoring migration 005 and T05 migration 008", () => {
         "007_t03_t04_document_search",
         "008_t05_template_validation",
         "009_t07_outputs",
+        "010_authoring_composition",
       ]);
       expect(upgraded.backupPath).not.toBeNull();
       const rows = upgraded.db.prepare(

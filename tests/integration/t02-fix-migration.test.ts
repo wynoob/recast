@@ -39,6 +39,7 @@ it("upgrades 001/002 in place, keeps every referenced legacy occurrence ID and i
       "007_t03_t04_document_search",
       "008_t05_template_validation",
       "009_t07_outputs",
+      "010_authoring_composition",
     ]);
     expect(upgraded.backupPath).not.toBeNull();
     expect(upgraded.db.prepare(
