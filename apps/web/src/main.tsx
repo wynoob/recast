@@ -9,7 +9,8 @@ import {
 } from "./pages.js";
 import { TemplateLibraryPage } from "./features/templates/TemplateLibraryPage.js";
 import { TemplateDetailPage } from "./features/templates/TemplateDetailPage.js";
-import { AuthoringPage } from "./features/authoring/AuthoringPage.js";
+import { ComposerPage } from "./features/composer/ComposerPage.js";
+import { HistoryPage } from "./features/history/HistoryPage.js";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -28,8 +29,10 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/contents" replace /> },
       { path: "contents", element: <ContentsPage /> },
-      { path: "contents/:id", element: <AuthoringPage /> },
-      { path: "contents/:id/edit/:renditionId", element: <AuthoringPage /> },
+      { path: "compose", element: <ComposerPage /> },
+      { path: "contents/:id", element: <ComposerPage /> },
+      { path: "contents/:id/history", element: <HistoryPage /> },
+      { path: "contents/:id/edit/:renditionId", element: <HistoryPage /> },
       { path: "assets", element: <AssetsPage /> },
       { path: "templates", element: <TemplateLibraryPage /> },
       { path: "templates/:id", element: <TemplateDetailPage /> },

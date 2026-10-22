@@ -20,26 +20,19 @@ test("three routes fit 360, 728 and 1280 without horizontal overflow", async ({ 
   }
 });
 
-test("creates a blank content and reopens it after reload", async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
+test("new content opens Composer without creating a blank draft", async ({ page }) => {
   await page.goto("/contents");
+  const legacyWrites: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/contents") legacyWrites.push(request.url());
+  });
   await page.getByRole("button", { name: /新建内容/ }).first().click();
-  const title = `浏览器验收 ${Date.now()}`;
-  await page.getByLabel("内容标题").fill(title);
-  await page.getByRole("button", { name: "建立空白内容" }).click();
-  await expect(page).toHaveURL(/\/contents\/[0-9a-f-]+$/);
-  await expect(page.getByRole("heading", { name: title })).toBeVisible();
-  await expect(page.getByText("完整编辑尚未开放")).toBeVisible();
-  const edited = `${title} 已改`;
-  await page.getByRole("textbox", { name: "内容标题" }).fill(edited);
-  await page.getByRole("button", { name: "保存标题" }).click();
-  await expect(page.getByText("标题已保存到本机。")).toBeVisible();
-  await page.reload();
-  await expect(page.getByRole("heading", { name: edited })).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(overflow).toBe(false);
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: testInfo.outputPath("content-detail-reopened.png"), fullPage: true });
+  await expect(page).toHaveURL(/\/compose$/);
+  await expect(page.getByLabel("想法与要求")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /飞书文档/ })).toBeChecked();
+  await page.getByRole("radio", { name: /HTML 演示/ }).check();
+  await expect(page.getByRole("button", { name: "生成创作方案" })).toBeDisabled();
+  expect(legacyWrites).toEqual([]);
 });
 
 test("settings drawer closes with Escape and restores focus", async ({ page }) => {

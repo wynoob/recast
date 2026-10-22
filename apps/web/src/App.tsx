@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CapabilityState, ContentKind } from "@dmall/contracts";
+import type { CapabilityState } from "@dmall/contracts";
 import {
   assetsQuery,
   contentsQuery,
-  createContent,
   healthQuery,
   settingsQuery,
   templatesQuery,
@@ -18,22 +17,12 @@ import { jobQuery } from "./features/assets/api.js";
 
 export function Shell() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const health = useQuery(healthQuery);
   useScanIntentRecovery(health.data?.csrfToken);
   const contents = useQuery(contentsQuery);
   const assets = useQuery(assetsQuery);
   const templates = useQuery(templatesQuery);
   const [drawer, setDrawer] = useState<"settings" | "tasks" | null>(null);
-  const [newOpen, setNewOpen] = useState(false);
-
-  const create = async (input: { title: string; kind: ContentKind }) => {
-    if (health.data === undefined) throw new Error("本地会话还在建立，请稍后重试");
-    const detail = await createContent({ ...input, csrfToken: health.data.csrfToken });
-    await queryClient.invalidateQueries({ queryKey: ["contents"] });
-    setNewOpen(false);
-    navigate(`/contents/${detail.id}`);
-  };
 
   return (
     <div className="app-shell">
@@ -61,17 +50,10 @@ export function Shell() {
         </div>
       </header>
       <main className="main-content">
-        <Outlet context={{ openNew: () => setNewOpen(true), openTasks: () => setDrawer("tasks"), health: health.data }} />
+        <Outlet context={{ openNew: () => navigate("/compose"), openSettings: () => setDrawer("settings"), openTasks: () => setDrawer("tasks"), health: health.data }} />
       </main>
       {drawer === "settings" ? <SettingsDrawer csrfToken={health.data?.csrfToken} onClose={() => setDrawer(null)} /> : null}
       {drawer === "tasks" ? <TasksDrawer csrfToken={health.data?.csrfToken} onClose={() => setDrawer(null)} /> : null}
-      {newOpen ? (
-        <NewContentDialog
-          disabled={health.data === undefined}
-          onClose={() => setNewOpen(false)}
-          onCreate={create}
-        />
-      ) : null}
       <div className="ambient ambient-a" aria-hidden="true" />
       <div className="ambient ambient-b" aria-hidden="true" />
     </div>
@@ -87,84 +69,6 @@ function CapsuleLink({ to, label, count }: { to: string; label: string; count: n
       <span>{label}</span>
       <span className="capsule-count">{count ?? 0}</span>
     </NavLink>
-  );
-}
-
-export function NewContentDialog({
-  disabled,
-  onClose,
-  onCreate,
-}: {
-  disabled: boolean;
-  onClose: () => void;
-  onCreate: (input: { title: string; kind: ContentKind }) => Promise<void>;
-}) {
-  const [title, setTitle] = useState("");
-  const [kind, setKind] = useState<ContentKind>("feishu_doc");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  return (
-    <Dialog title="新建内容" subtitle="先建立空白稿。没有配置模型也可以保存标题和需求。" onClose={onClose}>
-      <form
-        className="dialog-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const value = title.trim();
-          if (value === "" || disabled || busy) return;
-          setBusy(true);
-          setError(null);
-          onCreate({ title: value, kind })
-            .catch((reason: unknown) => {
-              setError(reason instanceof Error ? reason.message : "创建失败，请稍后重试");
-            })
-            .finally(() => setBusy(false));
-        }}
-      >
-        <label className="field">
-          <span>内容标题</span>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="例如：本周进展汇报"
-            maxLength={200}
-            data-autofocus
-          />
-        </label>
-        <fieldset className="format-field">
-          <legend>先建立哪种格式</legend>
-          <label className={`format-option${kind === "feishu_doc" ? " selected" : ""}`}>
-            <input
-              type="radio"
-              name="kind"
-              value="feishu_doc"
-              checked={kind === "feishu_doc"}
-              onChange={() => setKind("feishu_doc")}
-            />
-            <Icon name="doc" />
-            <span><b>飞书文档</b><small>用于长文汇报与章节编辑</small></span>
-          </label>
-          <label className={`format-option${kind === "html_deck" ? " selected" : ""}`}>
-            <input
-              type="radio"
-              name="kind"
-              value="html_deck"
-              checked={kind === "html_deck"}
-              onChange={() => setKind("html_deck")}
-            />
-            <Icon name="slide" />
-            <span><b>HTML 演示</b><small>用于分页演示与离线输出</small></span>
-          </label>
-        </fieldset>
-        {error === null ? null : <div className="inline-error">{error}</div>}
-        <div className="dialog-actions">
-          <button className="button secondary" type="button" onClick={onClose}>取消</button>
-          <button className="button primary" type="submit" disabled={disabled || busy || title.trim() === ""}>
-            {busy ? "正在保存…" : "建立空白内容"}
-          </button>
-        </div>
-      </form>
-    </Dialog>
   );
 }
 

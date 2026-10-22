@@ -8,7 +8,6 @@ import {
   TemplateListSchema,
   type AssetList,
   type ContentDetail,
-  type ContentKind,
   type ContentList,
   type Health,
   type Settings,
@@ -87,51 +86,6 @@ export function contentQuery(id: string) {
       return (await parseResponse(response, ApiSuccessSchema(ContentDetailSchema))).data;
     },
   };
-}
-
-export async function createContent(input: {
-  title: string;
-  kind: ContentKind;
-  csrfToken: string;
-}): Promise<ContentDetail> {
-  const body = {
-    schemaVersion: 1,
-    title: input.title,
-    kind: input.kind,
-  };
-  return writeContent("/api/v1/contents", "POST", input.csrfToken, body);
-}
-
-export async function updateContent(input: {
-  id: string;
-  title: string;
-  expectedVersion: number;
-  csrfToken: string;
-}): Promise<ContentDetail> {
-  return writeContent(`/api/v1/contents/${encodeURIComponent(input.id)}`, "PATCH", input.csrfToken, {
-    schemaVersion: 1,
-    expectedVersion: input.expectedVersion,
-    title: input.title,
-  });
-}
-
-async function writeContent(
-  url: string,
-  method: "POST" | "PATCH",
-  csrfToken: string,
-  body: unknown,
-): Promise<ContentDetail> {
-  const response = await fetch(url, {
-    method,
-    credentials: "same-origin",
-    headers: {
-      "content-type": "application/json",
-      "x-csrf-token": csrfToken,
-      "idempotency-key": crypto.randomUUID(),
-    },
-    body: JSON.stringify(body),
-  });
-  return (await parseResponse(response, ApiSuccessSchema(ContentDetailSchema))).data;
 }
 
 export async function parseResponse<T>(response: Response, schema: { parse(value: unknown): T }): Promise<T> {
