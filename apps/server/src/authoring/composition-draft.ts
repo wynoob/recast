@@ -39,7 +39,7 @@ export function compileCompositionDraft(input: {
   if (!validateAst(baseAst).ok || (baseAst.kind === "feishu_doc" ? baseAst.sections.length : baseAst.slides.length) !== 0) {
     invalid("正文转换需要合法空稿基线");
   }
-  if (pkg.manifest.status !== "ready" || pkg.manifest.templateVersionId !== proposal.template.versionId ||
+  if (pkg.manifest.status === "archived" || pkg.manifest.templateVersionId !== proposal.template.versionId ||
       canonicalHash(pkg) !== proposal.template.packageHash) {
     throw new ApiError({ statusCode: 422, code: "TEMPLATE_INVALID", message: "固定模板与确认方案不一致" });
   }

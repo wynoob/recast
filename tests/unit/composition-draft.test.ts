@@ -44,7 +44,6 @@ function fixture(kind: "feishu_doc" | "html_deck"): Input {
   const source = fixed[1]!;
   const image = fixed[2]!;
   const pkg = buildBuiltinTemplatePackage("training", kind);
-  pkg.manifest.status = "ready";
   pkg.narrative.doc.sections = ["first", "second"].map((id) => ({ id, title: id, purpose: "写作指导不作正文", requiredEvidence: [] }));
   pkg.narrative.deck.slides = ["first", "second"].map((id) => ({ id, title: id, purpose: "写作指导不作正文", layout: "title-body-media" }));
   const slotKinds = ["paragraph", "list", "table", "image"] as const;
@@ -114,6 +113,31 @@ function updatePackage(input: Input, change: (pkg: TemplatePackage) => void) {
 }
 
 describe("confirmed composition draft compilation", () => {
+  it("accepts a frozen draft manifest package without modifying it", () => {
+    const input = fixture("feishu_doc");
+    const packageHash = canonicalHash(input.templatePackage);
+    const frozen = structuredClone(input.templatePackage);
+    expect(input.templatePackage.manifest.status).toBe("draft");
+    expect(input.proposal.template.packageHash).toBe(packageHash);
+    expect(compileCompositionDraft(input).operations.length).toBeGreaterThan(0);
+    expect(input.templatePackage).toEqual(frozen);
+    expect(canonicalHash(input.templatePackage)).toBe(packageHash);
+  });
+
+  it("rejects archived packages and mismatched template identity", () => {
+    const input = fixture("feishu_doc");
+    const packageHash = canonicalHash(input.templatePackage);
+    input.proposal.template.versionId = randomUUID();
+    expect(() => compileCompositionDraft(input)).toThrowError(expect.objectContaining({ code: "TEMPLATE_INVALID" }));
+    input.proposal.template.versionId = input.templatePackage.manifest.templateVersionId;
+    input.proposal.template.packageHash = hash("wrong package");
+    expect(() => compileCompositionDraft(input)).toThrowError(expect.objectContaining({ code: "TEMPLATE_INVALID" }));
+    input.proposal.template.packageHash = packageHash;
+    input.templatePackage.manifest.status = "archived";
+    input.proposal.template.packageHash = canonicalHash(input.templatePackage);
+    expect(() => compileCompositionDraft(input)).toThrowError(expect.objectContaining({ code: "TEMPLATE_INVALID" }));
+  });
+
   it.each(["feishu_doc", "html_deck"] as const)("builds a complete %s with fixed media and truthful provenance", (kind) => {
     const input = fixture(kind);
     const { ast, claims } = apply(input);
