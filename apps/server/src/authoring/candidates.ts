@@ -70,6 +70,7 @@ export class CandidateService {
         item.kind === "source" ? item.sourceVersionId : "",
         item.kind === "media" ? item.assetVersionId : "",
         item.kind === "media" ? item.occurrence?.requestedOccurrenceId ?? "" : "",
+        item.kind === "media" ? item.occurrence?.sourceVersionId ?? "" : "",
         item.kind === "media" ? item.derivative?.id ?? "" : "",
         item.kind === "media" ? item.segment?.id ?? "" : "",
         item.kind === "media" ? item.poster?.id ?? "" : "",
@@ -320,6 +321,7 @@ function evidenceReferenceIds(
     return [
       evidence.assetVersionId,
       evidence.occurrence?.requestedOccurrenceId ?? "",
+      evidence.occurrence?.sourceVersionId ?? "",
       evidence.derivative?.id ?? "",
       evidence.segment?.id ?? "",
       evidence.poster?.id ?? "",
