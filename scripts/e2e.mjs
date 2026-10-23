@@ -53,7 +53,7 @@ try {
   await wait();
   const result = spawnSync(
     process.execPath,
-    ["node_modules/@playwright/test/cli.js", "test", "--config", "playwright.config.ts"],
+    ["node_modules/@playwright/test/cli.js", "test", "--config", "playwright.config.ts", ...process.argv.slice(2)],
     { stdio: "inherit", env: playwrightEnv },
   );
   process.exitCode = result.status ?? 1;

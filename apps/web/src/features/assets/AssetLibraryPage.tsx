@@ -12,7 +12,6 @@ import {
   formatDimensions,
   formatDurationMs,
   mediaKindLabel,
-  originSummaryLabel,
   sourceKindLabel,
 } from "./format.js";
 import { useTaskRecords } from "./task-store.js";
@@ -156,12 +155,11 @@ export function AssetLibraryPage() {
   };
 
   return (
-    <div className="page">
+    <div className="page asset-library-page">
       <div className="page-header">
         <div>
-          <span className="eyebrow">素材库</span>
-          <h1>让证据随时可找</h1>
-          <p>素材按真实文件记录，保留来源、章节上下文和每次出现位置。没有示例素材。</p>
+          <h1>素材库</h1>
+          <p>先看完整画面，再决定怎样使用。</p>
         </div>
         <div>
           <button
@@ -177,11 +175,11 @@ export function AssetLibraryPage() {
         </div>
       </div>
 
-      <div className="metric-grid">
-        <Metric label="本地媒体" value={overview.data === undefined ? "…" : String(mediaTotal)} hint={`${overview.data?.groupCounts.mp4 ?? 0} MP4 · ${overview.data?.groupCounts.gif ?? 0} GIF · ${overview.data?.groupCounts.image ?? 0} 图片`} />
-        <Metric label="可用预览" value={availableCount === undefined ? "…" : String(availableCount)} hint="原件与预览均可读取" />
-        <Metric label="来源文档" value={overview.data === undefined ? "…" : String(overview.data.groupCounts.documentSources)} hint={`${overview.data?.groupCounts.missingOccurrences ?? 0} 个缺失位置`} />
-        <Metric label="任务记录" value={String(tasks.length)} hint="只存任务编号，状态从服务端核对" />
+      <div className="asset-library-summary" aria-label="素材概况">
+        <span>{overview.data === undefined ? "正在读取" : `${mediaTotal} 份媒体`}</span>
+        <span>{availableCount === undefined ? "" : `${availableCount} 份可读取`}</span>
+        <span>{overview.data === undefined ? "" : `${overview.data.groupCounts.documentSources} 份来源文档`}</span>
+        <span>导入任务 {tasks.length}</span>
       </div>
 
       <section className="asset-toolbar" aria-label="素材筛选">
@@ -218,24 +216,29 @@ export function AssetLibraryPage() {
             <option value="missing">缺失</option>
           </select>
         </label>
-        <label className="asset-state">
-          <span className="sr-only">商家 UUID</span>
-          <input
-            value={merchantFilter}
-            disabled={type === "source" && query === ""}
-            onChange={(event) => setMerchantFilter(event.target.value)}
-            placeholder="商家 UUID（可选）"
-            spellCheck={false}
-          />
-        </label>
-        <label className="asset-state">
-          <span className="sr-only">记录日期从</span>
-          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-        </label>
-        <label className="asset-state">
-          <span className="sr-only">记录日期到</span>
-          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-        </label>
+        <details className="asset-advanced-filters">
+          <summary>更多筛选</summary>
+          <div className="asset-advanced-fields">
+            <label className="asset-state">
+              <span className="sr-only">商家 UUID</span>
+              <input
+                value={merchantFilter}
+                disabled={type === "source" && query === ""}
+                onChange={(event) => setMerchantFilter(event.target.value)}
+                placeholder="商家 UUID（可选）"
+                spellCheck={false}
+              />
+            </label>
+            <label className="asset-state">
+              <span className="sr-only">记录日期从</span>
+              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            </label>
+            <label className="asset-state">
+              <span className="sr-only">记录日期到</span>
+              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            </label>
+          </div>
+        </details>
       </section>
 
       {overview.isError ? <ErrorLine message={overview.error.message} /> : null}
@@ -354,7 +357,7 @@ export function AssetLibraryPage() {
       ) : null}
 
       {selectedAssetId !== null && health !== undefined ? (
-        <AssetDetailDrawer assetId={selectedAssetId} csrfToken={health.csrfToken} onClose={() => setSelectedAssetId(null)} />
+        <AssetDetailDrawer assetId={selectedAssetId} items={list.data?.items ?? []} onNavigate={setSelectedAssetId} csrfToken={health.csrfToken} onClose={() => setSelectedAssetId(null)} />
       ) : null}
       {selectedSource === null ? null : (
         <SourceContextPanel
@@ -402,23 +405,20 @@ function AssetGrid({ items, onOpen }: { items: AssetSummaryV2[]; onOpen: (id: st
             ) : (
               <img src={asset.posterFileUrl} alt="" loading="lazy" />
             )}
-            <span className="asset-kind">{mediaKindLabel(asset.mediaKind)}</span>
-            <span className="asset-origin">{originSummaryLabel(asset.origins)}</span>
             {asset.availability === "available" ? null : <span className="asset-warning">待补齐</span>}
           </span>
           <span className="asset-card-body">
-            <strong>{asset.title}</strong>
+            <span className="asset-card-title"><strong>{asset.title}</strong><span>{mediaKindLabel(asset.mediaKind)}</span></span>
             <small>
-              {asset.mediaKind === "video"
-                ? `${formatDurationMs(asset.durationMs)} · ${formatDimensions(asset.width, asset.height)}`
-                : `${formatDimensions(asset.width, asset.height)} · ${formatBytes(asset.bytes)}`}
+              {formatDimensions(asset.width, asset.height)} · {formatBytes(asset.bytes)}{asset.mediaKind === "video" ? ` · ${formatDurationMs(asset.durationMs)}` : ""}
             </small>
+            <span className="asset-card-usage">{asset.usageSummary ?? "暂无用途说明"}</span>
             <span className="asset-tags">
               {asset.tags.length === 0 ? <span className="muted small">暂无标签</span> : asset.tags.slice(0, 3).map((tag) => <span className="asset-tag" key={tag}>{tag}</span>)}
               {asset.tags.length > 3 ? <span className="muted small">+{asset.tags.length - 3}</span> : null}
             </span>
             <span className="asset-card-foot">
-              <span>{asset.sourceCount} 个来源 · {asset.occurrenceCount} 个位置</span>
+              <span>{asset.occurrenceCount} 个来源位置</span>
               <span>{asset.availability === "available" ? "可用" : "不可用"}</span>
             </span>
           </span>
@@ -539,10 +539,6 @@ function locatorSummary(locators: SearchHit["locators"]): string {
 
 function FilterButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return <button type="button" className={active ? "on" : ""} aria-pressed={active} onClick={onClick}>{children}</button>;
-}
-
-function Metric({ label, value, hint }: { label: string; value: string; hint: string }) {
-  return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small>{hint}</small></div>;
 }
 
 function EmptyFiltered({ onClear }: { onClear: () => void }) {

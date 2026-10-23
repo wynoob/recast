@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CapabilityState } from "@dmall/contracts";
 import {
@@ -17,6 +17,7 @@ import { jobQuery } from "./features/assets/api.js";
 
 export function Shell() {
   const navigate = useNavigate();
+  const assetRoute = useLocation().pathname === "/assets";
   const health = useQuery(healthQuery);
   useScanIntentRecovery(health.data?.csrfToken);
   const contents = useQuery(contentsQuery);
@@ -25,7 +26,7 @@ export function Shell() {
   const [drawer, setDrawer] = useState<"settings" | "tasks" | null>(null);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${assetRoute ? " asset-shell" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">D</span>

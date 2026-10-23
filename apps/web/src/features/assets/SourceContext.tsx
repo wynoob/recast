@@ -99,17 +99,17 @@ export function SourceContextPanel({
         {shown.map((occurrence) => (
           <article className="occurrence" key={occurrence.id}>
             <div className="occurrence-head">
-              <h4>{occurrence.headingPath === "" ? "未分章节" : occurrence.headingPath}</h4>
+              <h4>{occurrence.locator.kind === "local_file" ? "导入位置" : occurrence.headingPath || "文档片段"}</h4>
               <span className={`state-pill ${occurrence.mediaStatus === "available" ? "ready" : occurrence.mediaStatus === "missing" ? "draft" : "archived"}`}>
                 {mediaStatusLabel(occurrence.mediaStatus)}
               </span>
             </div>
-            <p className="context-text">{occurrence.beforeText === "" ? "（该位置前没有可展示的文字）" : occurrence.beforeText}</p>
+            {occurrence.beforeText === "" ? null : <p className="context-text">{occurrence.beforeText}</p>}
             <div className="context-gap">
-              <span>原图位置</span>
+              <span>{occurrence.locator.kind === "local_file" ? "文件路径" : "媒体位置"}</span>
               <code>{rawTarget(occurrence)}</code>
             </div>
-            <p className="context-text">{occurrence.afterText === "" ? "（该位置后没有可展示的文字）" : occurrence.afterText}</p>
+            {occurrence.afterText === "" ? null : <p className="context-text">{occurrence.afterText}</p>}
             <div className="raw-target">
               位置：{locatorDetails(occurrence)}
               {occurrence.errorCode === null ? "" : ` · ${occurrence.errorCode}`}

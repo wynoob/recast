@@ -1,417 +1,138 @@
-import { useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { normalizeTitle, normalizeTags } from "@dmall/domain/asset-fields";
-import type { AssetDetailV2, AssetOccurrenceView, PatchAssetRequest } from "@dmall/contracts";
-import { assetDetailQuery, conflictDetails, patchAsset } from "./api.js";
-import {
-  formatBytes,
-  formatDimensions,
-  formatDurationMs,
-  mediaKindLabel,
-  mediaStatusLabel,
-  originLabel,
-  probeSummary,
-} from "./format.js";
-import { locatorDetails, rawTarget, SourceContextPanel } from "./SourceContext.js";
-import { Dialog, ErrorLine, Icon, LoadingLine } from "../../ui.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useQuery } from "@tanstack/react-query";
+import type { AssetOccurrenceView, AssetSummaryV2 } from "@dmall/contracts";
+import { assetDetailQuery } from "./api.js";
+import { AssetEdit } from "./AssetEdit.js";
+import { AssetMedia } from "./AssetMedia.js";
+import { AssetDocumentExcerpt, AssetSourceDocument, AssetSources } from "./AssetSources.js";
+import { formatBytes, formatDimensions, formatDurationMs, mediaKindLabel } from "./format.js";
+import { ErrorLine, LoadingLine, useLayerFocus } from "../../ui.js";
+import "./asset-library.css";
 
-type SavePayload = Pick<PatchAssetRequest, "schemaVersion" | "expectedVersion">
-  & Pick<AssetDetailV2["humanFields"], "title" | "tags">;
+type PreviewView =
+  | { kind: "media" }
+  | { kind: "occurrence"; occurrence: AssetOccurrenceView }
+  | { kind: "document"; sourceId: string; versionId: string };
 
-interface ConflictState {
-  currentVersion: number;
-  title: string;
-  tags: string[];
-  origins: { title: "source" | "manual"; tags: "source" | "manual" };
-}
-
-export function AssetDetailDrawer({
-  assetId,
-  csrfToken,
-  onClose,
-}: {
+export function AssetDetailDrawer({ assetId, csrfToken, items = [], onNavigate, onClose }: {
   assetId: string;
   csrfToken: string;
+  items?: AssetSummaryV2[];
+  onNavigate?: (id: string) => void;
   onClose: () => void;
 }) {
-  const queryClient = useQueryClient();
+  const panel = useRef<HTMLElement>(null);
+  const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const detail = useQuery(assetDetailQuery(assetId));
-  const [title, setTitle] = useState("");
-  const [tagsText, setTagsText] = useState("");
-  const [baseline, setBaseline] = useState<{ title: string; tags: string[]; version: number } | null>(null);
-  const [initialized, setInitialized] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "saved" | "error" | "conflict">("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [conflict, setConflict] = useState<ConflictState | null>(null);
-  const [titleNotice, setTitleNotice] = useState<string | null>(null);
-  const [sourcePanel, setSourcePanel] = useState<{
-    sourceId: string;
-    versionId: string;
-    occurrences: AssetOccurrenceView[];
-  } | null>(null);
-  const generation = useRef(0);
-  const request = useRef<{ readonly payload: Readonly<SavePayload>; readonly key: string; readonly generation: number } | null>(null);
-  const inFlight = useRef(false);
-  const [pending, setPending] = useState(false);
-
+  const [view, setView] = useState<PreviewView>({ kind: "media" });
+  const [tab, setTab] = useState<"overview" | "source">("overview");
+  const [focused, setFocused] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editState, setEditState] = useState({ dirty: false, pending: false });
+  const [leaveAction, setLeaveAction] = useState<(() => void) | null>(null);
+  const index = items.findIndex((item) => item.id === assetId);
   const data = detail.data;
-  if (data !== undefined && initialized !== data.summary.id) {
-    const suggestionTitle =
-      data.humanFields.origins.title === "source" ? data.sourceSuggestion?.title ?? null : null;
-    setInitialized(data.summary.id);
-    setTitle(suggestionTitle ?? data.humanFields.title);
-    setTagsText(data.humanFields.tags.join(", "));
-    setBaseline({ title: data.humanFields.title, tags: data.humanFields.tags, version: data.summary.version });
-    setTitleNotice(
-      suggestionTitle !== null
-        ? "说明文档提供了标题，已预填。保存后才会采用。"
-        : data.humanFields.origins.title === "source" && data.sourceSuggestion !== null
-          ? "说明文档没有标题，继续使用文件名。"
-          : null,
-    );
-    setSaveState("idle");
-  }
 
-  const normalizedTitle = normalizeTitle(title);
-  const normalizedTags = parseTags(tagsText);
-  const valid = normalizedTitle !== "" && [...normalizedTitle].length <= 200 && normalizedTags !== null;
-  const dirty = baseline !== null && (normalizedTitle !== baseline.title || normalizedTags === null || !sameTags(normalizedTags, baseline.tags));
+  const updateEditState = useCallback((dirty: boolean, pending: boolean) => {
+    setEditState({ dirty, pending });
+  }, []);
+  const requestLeave = useCallback((action: () => void) => {
+    if (editState.pending) return;
+    if (editState.dirty) setLeaveAction(() => action);
+    else action();
+  }, [editState]);
+  const showView = (next: PreviewView) => {
+    setView(next);
+    requestAnimationFrame(() => {
+      const media = panel.current?.querySelector<HTMLElement>(".asset-viewer-media");
+      panel.current?.scrollTo({ top: 0 });
+      media?.querySelector<HTMLButtonElement>(".asset-source-document > button")?.focus({ preventScroll: true });
+    });
+  };
+  const back = () => {
+    if (leaveAction !== null) setLeaveAction(null);
+    else if (view.kind !== "media") setView({ kind: "media" });
+    else requestLeave(onClose);
+  };
+  useLayerFocus(panel, back);
+  useEffect(() => {
+    const shell = document.querySelector<HTMLElement>(".asset-shell");
+    if (shell === null) return;
+    const wasInert = shell.inert;
+    shell.inert = true;
+    return () => {
+      shell.inert = wasInert;
+      opener.current?.focus({ preventScroll: true });
+    };
+  }, []);
 
-  const save = async () => {
-    if (!valid || inFlight.current || data === undefined || baseline === null || normalizedTags === null || conflict !== null) return;
-    const payload: SavePayload = { schemaVersion: 1, expectedVersion: baseline.version, title: normalizedTitle, tags: normalizedTags };
-    if (request.current === null || JSON.stringify(request.current.payload) !== JSON.stringify(payload)) {
-      request.current = Object.freeze({ payload: Object.freeze(payload), key: crypto.randomUUID(), generation: generation.current });
-    }
-    const attempt = request.current;
-    inFlight.current = true;
-    setPending(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await patchAsset({
-        id: data.summary.id,
-        ...attempt.payload,
-        csrfToken,
-        idempotencyKey: attempt.key,
-      });
-      request.current = null;
-      setBaseline({ title: result.title, tags: result.tags, version: result.version });
-      if (generation.current === attempt.generation) {
-        setTitle(result.title);
-        setTagsText(result.tags.join(", "));
-        setSaveState("saved");
-        setNotice(`已保存为新版本（第 ${result.version + 1} 版）。`);
-      } else {
-        setSaveState("idle");
-        setNotice(`已保存第 ${result.version + 1} 版，后续输入尚未保存。`);
+  const navigate = useCallback((id: string) => {
+    if (onNavigate === undefined || id === assetId) return;
+    requestLeave(() => {
+      setEditing(false);
+      setEditState({ dirty: false, pending: false });
+      setView({ kind: "media" });
+      setLeaveAction(null);
+      onNavigate(id);
+    });
+  }, [assetId, onNavigate, requestLeave]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || leaveAction !== null) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("input,textarea,select,video,[contenteditable=true],[role=tablist],.asset-media-stage-actual")) return;
+      const next = items[index + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0)];
+      if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && next !== undefined) {
+        event.preventDefault();
+        navigate(next.id);
       }
-      await queryClient.invalidateQueries({ queryKey: ["asset", data.summary.id] });
-      await queryClient.invalidateQueries({ queryKey: ["assets"] });
-    } catch (reason) {
-      const latest = conflictDetails(reason);
-      if (latest === null) {
-        setSaveState("error");
-        setError(reason instanceof Error ? reason.message : "保存失败，请稍后重试");
-      } else {
-        setSaveState("conflict");
-        setConflict(latest);
-        setError(null);
-      }
-    } finally {
-      inFlight.current = false;
-      setPending(false);
-    }
-  };
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [index, items, navigate, leaveAction]);
+  useEffect(() => {
+    panel.current?.querySelector<HTMLElement>(".asset-film-item[aria-pressed=true]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [assetId]);
 
-  const adoptLatest = () => {
-    if (conflict === null) return;
-    setTitle(conflict.title);
-    setTagsText(conflict.tags.join(", "));
-    setBaseline({ title: conflict.title, tags: conflict.tags, version: conflict.currentVersion });
-    setConflict(null);
-    setSaveState("idle");
-    request.current = null;
-    setNotice("已载入最新版本，输入已替换为最新值。");
-  };
-
-  const keepMine = () => {
-    if (conflict === null) return;
-    setBaseline({ title: conflict.title, tags: conflict.tags, version: conflict.currentVersion });
-    setConflict(null);
-    setSaveState("idle");
-    request.current = null;
-    setNotice("已采用最新版本号。请再次点击保存，才会以你的输入创建新版本。");
-  };
-
-  return (
-    <Dialog
-      title={data?.summary.title ?? "素材详情"}
-      subtitle="原件、预览、来源和每次出现位置。标题与标签保存为新版本。"
-      onClose={onClose}
-      wide
-    >
+  return createPortal(
+    <section ref={panel} tabIndex={-1} className={`asset-viewer${focused ? " is-focused" : ""}`} role="dialog" aria-modal="true" aria-label="素材预览">
+      <header className="asset-viewer-header">
+        <button className="button asset-back" type="button" onClick={() => requestLeave(onClose)}>← 返回素材库</button>
+        <div className="asset-viewer-nav" aria-label="连续浏览">
+          <span>{index < 0 ? "" : `${index + 1} / ${items.length}`}</span>
+          <button className="button" type="button" aria-label="上一项" disabled={index <= 0 || editState.pending} onClick={() => { const item = items[index - 1]; if (item) navigate(item.id); }}>←</button>
+          <button className="button" type="button" aria-label="下一项" disabled={index < 0 || index >= items.length - 1 || editState.pending} onClick={() => { const item = items[index + 1]; if (item) navigate(item.id); }}>→</button>
+        </div>
+      </header>
+      <div className="asset-viewer-title">
+        <div><h1>{data?.summary.title ?? "素材预览"}</h1><p>{data === undefined ? "正在读取原件与信息" : `${mediaKindLabel(data.summary.mediaKind)} · ${formatDimensions(data.summary.width, data.summary.height)} · ${formatBytes(data.summary.bytes)}${data.summary.mediaKind === "video" ? ` · ${formatDurationMs(data.summary.durationMs)}` : ""}`}</p></div>
+        <button className="button" type="button" aria-pressed={focused} onClick={() => setFocused((value) => !value)}>{focused ? "显示信息" : "专注预览"}</button>
+      </div>
+      {leaveAction === null ? null : <div className="asset-unsaved" role="alert"><p>标题或标签有未保存的修改。</p><button className="button" type="button" onClick={() => setLeaveAction(null)}>继续编辑</button><button className="button" type="button" onClick={() => { setLeaveAction(null); setEditing(false); setEditState({ dirty: false, pending: false }); leaveAction(); }}>放弃未保存修改</button></div>}
       {detail.isLoading ? <LoadingLine label="正在打开素材" /> : null}
-      {detail.isError ? <ErrorLine message={detail.error.message} /> : null}
-      {data === undefined ? null : (
-        <>
-          <div className="asset-detail-layout">
-            <Preview data={data} />
-            <div className="asset-edit">
-              <div className="asset-kicker">
-                <span className="kind-pill">{mediaKindLabel(data.summary.mediaKind)}</span>
-                <span className={`state-pill ${data.summary.availability === "available" ? "ready" : "draft"}`}>
-                  {data.summary.availability === "available" ? "原件与预览可用" : "需要补齐"}
-                </span>
-                <span className="soft-pill">第 {data.summary.version + 1} 版</span>
-              </div>
-              <label className="field">
-                <span>标题 · {originLabel(data.humanFields.origins.title)}</span>
-                <input
-                  value={title}
-                  onChange={(event) => { generation.current += 1; setTitle(event.target.value); setTitleNotice(null); setSaveState("idle"); setNotice(null); }}
-                />
-              </label>
-              {titleNotice === null ? null : <p className="section-note title-note">{titleNotice}</p>}
-              <label className="field">
-                <span>标签 · 逗号分隔 · {originLabel(data.humanFields.origins.tags)}</span>
-                <input
-                  value={tagsText}
-                  onChange={(event) => { generation.current += 1; setTagsText(event.target.value); setSaveState("idle"); setNotice(null); }}
-                  placeholder="例如：经营诊断, 昨日销量"
-                />
-              </label>
-              <div className="save-line">
-                <button
-                  className="button primary"
-                  type="button"
-                  onClick={() => { void save(); }}
-                  disabled={!valid || !dirty || pending || conflict !== null}
-                >
-                  {pending ? "保存中…" : "保存修改"}
-                </button>
-                <span className="muted small">
-                  {saveState === "saved" ? "已保存" : saveState === "conflict" ? "有冲突" : "保存会创建新版本"}
-                </span>
-              </div>
-              {notice === null ? null : <div className="inline-success" role="status">{notice}</div>}
-              {error === null ? null : <ErrorLine message={error} />}
-              {conflict === null ? null : (
-                <div className="conflict-box" role="alert">
-                  <b>素材已被另一处修改，已载入最新版本。</b>
-                  <p>你输入的内容仍保留，没有自动覆盖另一处修改。</p>
-                  <dl>
-                    <div><dt>最新标题</dt><dd>{conflict.title}</dd></div>
-                    <div><dt>最新标签</dt><dd>{conflict.tags.length === 0 ? "无" : conflict.tags.join("、")}</dd></div>
-                    <div><dt>最新版本</dt><dd>第 {conflict.currentVersion + 1} 版</dd></div>
-                  </dl>
-                  <div className="dialog-actions wrap">
-                    <button className="button" type="button" onClick={adoptLatest}>载入最新版本</button>
-                    <button className="button primary" type="button" onClick={keepMine}>保留我的输入</button>
-                  </div>
-                </div>
-              )}
-            </div>
+      {detail.isError ? <div><ErrorLine message={detail.error.message} /><button className="button" type="button" onClick={() => { void detail.refetch(); }}>重试</button></div> : null}
+      {data === undefined ? null : <div className="asset-viewer-layout">
+        <div className="asset-viewer-media">
+          {view.kind === "media" ? <AssetMedia key={assetId} data={data} /> : view.kind === "occurrence" ? <AssetDocumentExcerpt occurrence={view.occurrence} onBack={() => setView({ kind: "media" })} posterUrl={data.summary.posterFileUrl} title={data.summary.title} /> : <AssetSourceDocument sourceId={view.sourceId} versionId={view.versionId} onBack={() => setView({ kind: "media" })} />}
+          <nav className="asset-filmstrip" aria-label="本页素材">
+            {items.map((item) => <button className="asset-film-item" type="button" key={item.id} aria-label={`预览${item.title}`} aria-pressed={item.id === assetId} disabled={editState.pending} onClick={() => navigate(item.id)}>{item.posterFileUrl === null ? <span className="asset-film-fallback">{mediaKindLabel(item.mediaKind)}</span> : <img src={item.posterFileUrl} alt="" />}<span>{item.title}</span></button>)}
+          </nav>
+        </div>
+        <aside className="asset-properties" hidden={focused} aria-label="素材信息">
+          <div className="asset-detail-tabs" role="tablist" aria-label="素材信息分类">
+            <button id="asset-overview-tab" role="tab" type="button" aria-selected={tab === "overview"} aria-controls="asset-overview" onClick={() => setTab("overview")}>概览</button>
+            <button id="asset-source-tab" role="tab" type="button" aria-selected={tab === "source"} aria-controls="asset-source" onClick={() => setTab("source")}>来源</button>
           </div>
-
-          <section className="drawer-section">
-            <div className="panel-title-row">
-              <h3>文件信息</h3>
-              <span className="soft-pill">{data.summary.mime}</span>
-            </div>
-            <dl className="detail-list two-column">
-              <div><dt>大小</dt><dd>{formatBytes(data.summary.bytes)}</dd></div>
-              <div><dt>尺寸</dt><dd>{formatDimensions(data.summary.width, data.summary.height)}</dd></div>
-              <div><dt>时长</dt><dd>{formatDurationMs(data.summary.durationMs)}</dd></div>
-              <div><dt>媒体信息</dt><dd>{probeSummary(data.metadata.probe)}</dd></div>
-              <div><dt>来源数量</dt><dd>{data.summary.sourceCount}</dd></div>
-              <div><dt>出现位置</dt><dd>{data.summary.occurrenceCount}</dd></div>
-            </dl>
-            {data.metadata.extensionMismatch ? (
-              <div className="notice warn"><Icon name="alert" /><div><b>扩展名与真实格式不一致。</b><br />系统按文件内容识别为 {data.metadata.magicMime}。</div></div>
-            ) : null}
-          </section>
-
-          <section className="drawer-section">
-            <div className="panel-title-row">
-              <h3>来源与出现位置</h3>
-              <span className="soft-pill">{data.occurrences.length} 处</span>
-            </div>
-            {data.occurrences.length === 0 ? <p className="section-note">这条素材还没有来源位置。</p> : null}
-            <div className="occurrence-list">
-              {groupOccurrences(data.occurrences).map((group) => {
-                const first = group.items[0];
-                if (first === undefined) return null;
-                return (
-                  <article className="occurrence" key={group.key}>
-                    <div className="occurrence-head">
-                      <h4>{first.sourceTitle === "" ? "未知来源" : first.sourceTitle}</h4>
-                      <span className={`state-pill ${groupMissing(group.items) ? "draft" : "ready"}`}>
-                        {groupMissing(group.items) ? `${group.items.filter((item) => item.mediaStatus === "missing").length} 处缺失` : "可用"}
-                      </span>
-                    </div>
-                    <p className="section-note">{first.sourceRelativePath} · {group.items.length} 个位置</p>
-                    {group.items.map((occurrence) => (
-                      <div className="occurrence-line" key={occurrence.id}>
-                        <b>{occurrence.headingPath === "" ? "未分章节" : occurrence.headingPath}</b>
-                        <span className="muted small">{mediaStatusLabel(occurrence.mediaStatus)}</span>
-                        <span className="raw-target">{rawTarget(occurrence)} · {locatorDetails(occurrence)}</span>
-                      </div>
-                    ))}
-                    <button
-                      className="button small"
-                      type="button"
-                      onClick={() => setSourcePanel({
-                        sourceId: first.sourceId,
-                        versionId: first.sourceVersionId,
-                        occurrences: group.items,
-                      })}
-                    >
-                      <Icon name="source" />
-                      查看来源上下文
-                    </button>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-
-          {data.sourceSuggestion === null ? null : (
-            <SourceSuggestionSection
-              suggestion={data.sourceSuggestion}
-              onOpenSource={(sourceId, versionId) => setSourcePanel({ sourceId, versionId, occurrences: [] })}
-            />
-          )}
-
-          <div className="notice warn">
-            <Icon name="info" />
-            <div><b>文字识别未配置。</b><br />当前不显示识别文本。视频可播放，图片与动图使用真实原件或预览。</div>
+          <div id="asset-overview" role="tabpanel" aria-labelledby="asset-overview-tab" hidden={tab !== "overview"}>
+            <section className="asset-property-section"><h2>适合怎样使用</h2><p className="asset-usage">{data.sourceSuggestion?.usageText ?? "暂无用途说明。可先查看画面与文件信息。"}</p>{data.sourceSuggestion === null ? null : <p className="asset-property-note">来自「{data.sourceSuggestion.provenance.sourceTitle}」的说明，内容需结合实际场景核对。</p>}</section>
+            <section className="asset-property-section"><h2>文件信息</h2><dl className="asset-file-facts"><div><dt>类型</dt><dd>{data.summary.mime}</dd></div><div><dt>大小</dt><dd>{formatBytes(data.summary.bytes)}</dd></div><div><dt>尺寸</dt><dd>{formatDimensions(data.summary.width, data.summary.height)}</dd></div><div><dt>{data.summary.mediaKind === "video" ? "原件时长" : "导入日期"}</dt><dd>{data.summary.mediaKind === "video" ? formatDurationMs(data.summary.durationMs) : data.summary.createdAt.slice(0, 10)}</dd></div></dl>{data.metadata.extensionMismatch ? <p className="asset-property-note">扩展名与文件格式不一致，实际为 {data.metadata.magicMime}。</p> : null}{data.summary.availability === "available" ? <span className="asset-property-note">原件与预览可读取</span> : <p className="asset-property-note">文件或预览需要补齐。</p>}</section>
+            <section className="asset-property-section"><h2>标签</h2><div className="asset-tags">{data.humanFields.tags.length ? data.humanFields.tags.map((tag) => <span className="asset-tag" key={tag}>{tag}</span>) : <span className="muted">暂无标签</span>}</div><button className="asset-text-button" type="button" aria-expanded={editing} onClick={() => requestLeave(() => setEditing(!editing))}>{editing ? "收起编辑" : "编辑标题与标签"}</button><div hidden={!editing}>{editing ? <AssetEdit key={assetId} data={data} csrfToken={csrfToken} onDirtyChange={updateEditState} /> : null}</div></section>
+            <section className="asset-property-section"><h2>出处</h2><p className="asset-property-note">{data.occurrences.find((item) => item.locator.kind !== "local_file")?.sourceTitle ?? "本地文件导入"}</p><button className="asset-text-button" type="button" onClick={() => setTab("source")}>查看导入位置与文档依据</button></section>
           </div>
-          <div className="dialog-actions">
-            <button className="button" type="button" onClick={onClose}>关闭</button>
-          </div>
-        </>
-      )}
-      {sourcePanel === null ? null : (
-        <SourceContextPanel
-          occurrences={sourcePanel.occurrences}
-          sourceId={sourcePanel.sourceId}
-          versionId={sourcePanel.versionId}
-          onClose={() => setSourcePanel(null)}
-        />
-      )}
-    </Dialog>
+          <div id="asset-source" role="tabpanel" aria-labelledby="asset-source-tab" hidden={tab !== "source"}><AssetSources data={data} onShowOccurrence={(occurrence) => showView({ kind: "occurrence", occurrence })} onShowSource={(sourceId, versionId) => showView({ kind: "document", sourceId, versionId })} /></div>
+        </aside>
+      </div>}
+    </section>, document.body,
   );
-}
-
-function Preview({ data }: { data: AssetDetailV2 }) {
-  const { summary } = data;
-  if (summary.originalFileUrl === null) {
-    return (
-      <div className="asset-preview missing">
-        <Icon name="alert" />
-        <span>原件不可用</span>
-      </div>
-    );
-  }
-  if (summary.mediaKind === "video") {
-    return (
-      <div className="asset-preview">
-        <video
-          controls
-          playsInline
-          preload="metadata"
-          src={summary.originalFileUrl}
-          poster={summary.posterFileUrl ?? undefined}
-          data-testid="asset-video"
-        />
-        <span className="preview-caption">原件播放 · 支持拖动进度</span>
-      </div>
-    );
-  }
-  return (
-    <div className="asset-preview">
-      <img
-        src={summary.originalFileUrl}
-        alt={summary.title}
-        loading="lazy"
-        data-testid={summary.mediaKind === "gif" ? "asset-gif" : "asset-image"}
-      />
-      <span className="preview-caption">{summary.mediaKind === "gif" ? "原始 GIF · 保持动画" : "原始图片"}</span>
-    </div>
-  );
-}
-
-function SourceSuggestionSection({
-  suggestion,
-  onOpenSource,
-}: {
-  suggestion: NonNullable<AssetDetailV2["sourceSuggestion"]>;
-  onOpenSource: (sourceId: string, versionId: string) => void;
-}) {
-  const [rawOpen, setRawOpen] = useState(false);
-  return (
-    <section className="drawer-section suggestion-section">
-      <div className="panel-title-row">
-        <h3>使用说明</h3>
-        <span className="soft-pill">来源建议</span>
-      </div>
-      <p className="suggestion-source">
-        {suggestion.provenance.sourceTitle} · {suggestion.provenance.sourceRelativePath}
-        <span>
-          File {suggestion.provenance.fileCell} · 版本 {suggestion.provenance.sourceVersionId.slice(0, 12)}
-        </span>
-        <span>
-          第 {suggestion.provenance.lineStart}–{suggestion.provenance.lineEnd} 行
-          {suggestion.provenance.sectionHeading === "" ? "" : ` · ${suggestion.provenance.sectionHeading}`}
-        </span>
-      </p>
-      <p className="usage-text">{suggestion.usageText}</p>
-      {suggestion.ignoredSuggestionCount === 0 ? null : (
-        <p className="section-note">另有 {suggestion.ignoredSuggestionCount} 条说明未用于本素材。</p>
-      )}
-      <div className="dialog-actions wrap">
-        <button
-          className="button small"
-          type="button"
-          onClick={() => onOpenSource(suggestion.provenance.sourceId, suggestion.provenance.sourceVersionId)}
-        >
-          <Icon name="source" />
-          打开来源
-        </button>
-        <button className="button small" type="button" aria-expanded={rawOpen} onClick={() => setRawOpen((value) => !value)}>
-          {rawOpen ? "收起原文" : "查看原文"}
-        </button>
-      </div>
-      {rawOpen ? <pre className="usage-raw">{suggestion.usageMarkdown}</pre> : null}
-    </section>
-  );
-}
-
-function groupOccurrences(occurrences: AssetOccurrenceView[]): Array<{ key: string; items: AssetOccurrenceView[] }> {
-  const groups = new Map<string, AssetOccurrenceView[]>();
-  for (const occurrence of occurrences) {
-    const key = occurrence.sourceVersionId;
-    const list = groups.get(key);
-    if (list === undefined) groups.set(key, [occurrence]);
-    else list.push(occurrence);
-  }
-  return [...groups.entries()].map(([key, items]) => ({ key, items }));
-}
-
-function groupMissing(items: AssetOccurrenceView[]): boolean {
-  return items.some((item) => item.mediaStatus === "missing" || item.mediaStatus === "unsupported");
-}
-
-function parseTags(value: string): string[] | null {
-  try {
-    return normalizeTags(value.split(/[,，]/u)).display;
-  } catch {
-    return null;
-  }
-}
-
-function sameTags(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((tag, index) => tag === right[index]);
 }
