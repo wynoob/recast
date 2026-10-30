@@ -83,7 +83,7 @@ export function AssetLibraryPage() {
       q: query,
       ...(type === "all" || type === "source" ? {} : { type }),
       ...(availability === "all" ? {} : { state: availability }),
-      limit: 12,
+      limit: 40,
       cursor,
     }),
     enabled: type !== "source" && query === "",
