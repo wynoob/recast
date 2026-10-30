@@ -104,7 +104,9 @@ test("source filter renders real rows and opens sourceId plus currentVersionId",
   await expect(page.locator(".source-row").first()).toContainText("本地 Markdown");
   expect(detailRequests).toHaveLength(0);
   await page.locator(".source-row").first().click();
-  const overlay = page.getByRole("region", { name: "来源文档上下文" });
+  await expect(page.getByRole("dialog", { name: "来源文档上下文" })).toHaveCount(0);
+  await page.getByRole("button", { name: "打开来源上下文", exact: true }).click();
+  const overlay = page.getByRole("dialog", { name: "来源文档上下文" });
   await expect(overlay).toContainText("真实来源 A");
   await expect(overlay).toContainText("第一章");
   await overlay.getByRole("button", { name: "关闭来源上下文" }).click();

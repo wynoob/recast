@@ -106,7 +106,7 @@ function Composer({ contentId }: { contentId: string | undefined }) {
           <div className="composer-library-links"><Link to="/assets">管理素材</Link><Link to="/templates">管理模板</Link></div>
         </aside>
         <section className="panel composer-stage" aria-label="创作状态">
-          {view === undefined && contentId === undefined ? <div className="composer-empty"><h2>方案会在这里展开</h2><p>查看真实模板、素材出处、章节或页面和图片安排，再决定是否生成。</p></div> : null}
+          {view === undefined && contentId === undefined ? <div className="composer-empty"><h2>方案会在这里展开</h2><p>查看模板、素材出处、章节或页面和图片安排，再决定是否生成。</p></div> : null}
           {view?.state === "proposed" ? <ProposalPanel key={view.proposal.id} proposal={view.proposal} selection={selection} disabled={disabled} onAdjust={(command) => run({ kind: "submit", command })} onConfirm={() => run({ kind: "confirm", command: { proposalId: view.proposal.id, proposalHash: view.proposal.hash } })} /> : null}
           {view?.state === "planning" || view?.state === "working" ? <ProgressPanel view={view} /> : null}
           {view?.state === "blocked" ? <BlockedPanel view={view} disabled={disabled} onConfigure={openSettings} onAdjust={(instruction) => run({ kind: "submit", command: { mode: "adjust", contentId: view.contentId, expectedVersion: view.version, instruction } })} onResume={(command) => run({ kind: "resume", command })} /> : null}

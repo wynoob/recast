@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useNavigate, useOutletContext } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useOutletContext } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ContentKind,
@@ -8,7 +8,14 @@ import type {
   TemplateSummary,
 } from "@dmall/contracts";
 import { createTemplate, templateListQuery } from "./api.js";
-import { Dialog, ErrorLine, LoadingLine } from "../../ui.js";
+import { Dialog, ErrorLine, Icon, LoadingLine } from "../../ui.js";
+import {
+  InspectorFacts,
+  InspectorPanel,
+  InspectorSection,
+  InspectorShell,
+  useInspector,
+} from "../../inspector.js";
 
 interface Context {
   health: Health | undefined;
@@ -36,12 +43,17 @@ export function TemplateLibraryPage() {
   const [kind, setKind] = useState<"all" | ContentKind>("all");
   const [status, setStatus] = useState<"all" | "draft" | "ready" | "archived">("all");
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const inspector = useInspector("templates");
   const filters = {
     ...(q.trim() === "" ? {} : { q: q.trim() }),
     ...(kind === "all" ? {} : { kind }),
     ...(status === "all" ? {} : { status }),
   };
   const templates = useQuery(templateListQuery(filters));
+  const items = useMemo(() => templates.data?.items ?? [], [templates.data]);
+  const selected = items.find((template) => template.id === selectedId) ?? null;
+  const filtered = q.trim() !== "" || kind !== "all" || status !== "all";
   const create = useMutation({
     mutationFn: async (input: {
       name: string;
@@ -58,89 +70,184 @@ export function TemplateLibraryPage() {
     },
   });
 
+  useEffect(() => {
+    if (selectedId !== null && !items.some((template) => template.id === selectedId)) setSelectedId(null);
+  }, [items, selectedId]);
+
+  useEffect(() => {
+    if (inspector.narrow || inspector.preference !== "expanded" || selectedId !== null) return;
+    const first = items[0];
+    if (first !== undefined) setSelectedId(first.id);
+  }, [items, inspector.narrow, inspector.preference, selectedId]);
+
+  const select = (id: string) => {
+    setSelectedId(id);
+    if (inspector.narrow) inspector.open();
+  };
+  const revealInspector = () => {
+    if (inspector.expanded) {
+      inspector.close();
+      return;
+    }
+    if (selectedId === null && items[0] !== undefined) setSelectedId(items[0].id);
+    inspector.open();
+  };
+
   return (
-    <div className="page template-page">
-      <header className="page-header template-page-header">
+    <div className="page">
+      <header className="page-head">
         <div>
-          <span className="eyebrow">模板库 · T05</span>
-          <h1>让结构先站稳</h1>
-          <p>六种叙事、八种演示版式。草稿只有经过当前 Chromium 与 PDF 验证，才会成为已就绪版本。</p>
+          <h1>模板库</h1>
+          <span className="page-summary">
+            {templates.data?.total ?? 0} 个模板 · 六种叙事，文档与演示共用一套结构
+          </span>
         </div>
-        <button className="button primary" type="button" onClick={() => setCreateOpen(true)}>
-          ＋ 建立模板草稿
-        </button>
+        <div className="page-actions">
+          <button className="button primary" type="button" onClick={() => setCreateOpen(true)}>
+            <Icon name="plus" />
+            建立模板草稿
+          </button>
+        </div>
       </header>
 
-      <section className="template-toolbar" aria-label="模板筛选">
-        <label className="template-search">
-          <span aria-hidden="true">⌕</span>
+      <div className="toolbar" aria-label="模板筛选">
+        <label className="search-box">
+          <Icon name="search" />
+          <span className="sr-only">搜索模板名称</span>
           <input
             value={q}
             onChange={(event) => setQ(event.target.value)}
             placeholder="搜索模板名称"
             aria-label="搜索模板名称"
+            type="search"
+            autoComplete="off"
           />
         </label>
-        <select value={kind} onChange={(event) => setKind(parseKindFilter(event.target.value))} aria-label="模板格式">
-          <option value="all">全部格式</option>
-          <option value="feishu_doc">飞书文档</option>
-          <option value="html_deck">HTML 演示</option>
-        </select>
-        <select
-          value={status}
-          onChange={(event) => setStatus(parseStatusFilter(event.target.value))}
-          aria-label="模板状态"
-        >
-          <option value="all">全部状态</option>
-          <option value="draft">草稿</option>
-          <option value="ready">已就绪</option>
-          <option value="archived">已归档</option>
-        </select>
-        <span className="template-count">{templates.data?.total ?? 0} 个模板</span>
-      </section>
+        <label className="select-wrap">
+          <span>格式</span>
+          <select value={kind} onChange={(event) => setKind(parseKindFilter(event.target.value))} aria-label="模板格式">
+            <option value="all">全部格式</option>
+            <option value="feishu_doc">飞书文档</option>
+            <option value="html_deck">HTML 演示</option>
+          </select>
+        </label>
+        <label className="select-wrap">
+          <span>状态</span>
+          <select
+            value={status}
+            onChange={(event) => setStatus(parseStatusFilter(event.target.value))}
+            aria-label="模板状态"
+          >
+            <option value="all">全部状态</option>
+            <option value="draft">草稿</option>
+            <option value="ready">已就绪</option>
+            <option value="archived">已归档</option>
+          </select>
+        </label>
+      </div>
 
-      <section className="narrative-gallery" aria-label="六种叙事预览">
-        <div className="narrative-gallery-head">
-          <span className="eyebrow">叙事样张</span>
-          <p>同一个内容结构同时映射为飞书文档和 HTML 演示。</p>
+      <div className="result-bar">
+        <span>
+          <strong>{templates.data?.total ?? 0} 个模板</strong>
+          {templates.data?.nextCursor == null ? null : <span className="result-note"> · 当前显示 {items.length} 个，可搜索其他模板</span>}
+          {filtered ? <span className="result-note"> · 已筛选</span> : null}
+        </span>
+        <div className="result-actions">
+          <span className="result-note">按最近更新</span>
+          <button
+            className="button small inspector-toggle"
+            type="button"
+            aria-expanded={inspector.expanded}
+            aria-controls="template-inspector"
+            onClick={revealInspector}
+          >
+            {inspector.expanded ? "收起详情" : "展开详情"}
+          </button>
         </div>
-        <div className="narrative-gallery-track">
-          {NARRATIVES.map((narrative, index) => (
-            <article className={`narrative-mini narrative-${narrative.id}`} key={narrative.id}>
-              <span className="narrative-mini-index">{String(index + 1).padStart(2, "0")}</span>
-              <b>{narrative.name}</b>
-              <div>
-                {narrative.beats.slice(0, 4).map((beat) => <i key={beat}>{beat}</i>)}
-              </div>
-              <small>{narrative.scene}</small>
-            </article>
-          ))}
-        </div>
-      </section>
+      </div>
 
-      {templates.isLoading ? <section className="panel"><LoadingLine label="正在读取模板库" /></section> : null}
-      {templates.isError ? <section className="panel"><ErrorLine message={templates.error.message} /></section> : null}
-      {templates.data?.items.length === 0 ? (
-        <section className="empty-panel template-empty">
-          <span className="empty-icon" aria-hidden="true">▤</span>
-          <h2>{q === "" && kind === "all" && status === "all" ? "模板库还没有内容" : "没有符合条件的模板"}</h2>
-          <p>
-            {q === "" && kind === "all" && status === "all"
-              ? "先选择一种叙事和输出格式，建立可编辑的本地草稿。验证不会由页面伪造。"
-              : "调整格式、状态或搜索词后再试。"}
-          </p>
-          {q === "" && kind === "all" && status === "all" ? (
-            <button className="button primary" type="button" onClick={() => setCreateOpen(true)}>建立第一份模板草稿</button>
+      <div className={`layout${inspector.expanded ? "" : " collapsed"}`}>
+        <div className="library-list">
+          {templates.isLoading ? <LoadingLine label="正在读取模板库" /> : null}
+          {templates.isError ? <ErrorLine message={templates.error.message} /> : null}
+          {templates.isSuccess && items.length === 0 ? (
+            <section className="empty-panel template-empty">
+              <span className="empty-icon" aria-hidden="true">▤</span>
+              <h2>{filtered ? "没有符合条件的模板" : "模板库还没有内容"}</h2>
+              <p>
+                {filtered
+                  ? "调整格式、状态或搜索词后再试。"
+                  : "先选择一种叙事和输出格式，建立可编辑的本地草稿。验证不会由页面伪造。"}
+              </p>
+              {filtered ? null : (
+                <button className="button primary" type="button" onClick={() => setCreateOpen(true)}>建立第一份模板草稿</button>
+              )}
+            </section>
           ) : null}
-        </section>
-      ) : null}
-      {templates.data !== undefined && templates.data.items.length > 0 ? (
-        <section className="template-grid" aria-label="模板列表">
-          {templates.data.items.map((template) => (
-            <TemplateCard template={template} key={template.id} />
-          ))}
-        </section>
-      ) : null}
+          {items.length > 0 ? (
+            <div className="library-grid" aria-label="模板列表">
+              {items.map((template) => (
+                <TemplateCard
+                  template={template}
+                  selected={selectedId === template.id}
+                  key={template.id}
+                  onSelect={() => select(template.id)}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <InspectorShell
+          open={inspector.expanded}
+          narrow={inspector.narrow}
+          label="模板详情"
+          onClose={inspector.close}
+        >
+          <InspectorPanel
+            id="template-inspector"
+            label="模板检查器"
+            meta={selected === null ? "未选择" : `v${selected.currentVersion ?? 1} · ${kindLabel(selected.kind)}`}
+            title={selected?.name}
+            subtitle={selected?.narrativeName}
+            preview={<div className="inspector-art"><Icon name={selected?.kind === "html_deck" ? "slide" : "template"} /></div>}
+            closeLabel="关闭模板详情"
+            onClose={inspector.close}
+            emptyTitle="没有可查看的模板"
+            emptyCopy="选择一份模板后，这里显示版本状态与编辑入口。"
+            actions={selected === null ? undefined : (
+              <>
+                <button className="button primary" type="button" onClick={() => navigate(`/templates/${selected.id}`)}>
+                  打开模板编辑
+                </button>
+                <button className="button secondary" type="button" onClick={() => setCreateOpen(true)}>
+                  建立草稿
+                </button>
+              </>
+            )}
+          >
+            {selected === null ? null : (
+              <>
+                <InspectorSection title="版本状态">
+                  <InspectorFacts
+                    rows={[
+                      { label: "状态", value: templateStatusLabel(selected.status, selected.validationStatus) },
+                      { label: "输出格式", value: kindLabel(selected.kind) },
+                      { label: "当前版本", value: `v${selected.currentVersion ?? 1}` },
+                      { label: "验证", value: validationLabel(selected.validationStatus) },
+                      { label: "创建", value: formatDate(selected.createdAt) },
+                      { label: "最近更新", value: formatDate(selected.updatedAt) },
+                    ]}
+                  />
+                </InspectorSection>
+                <InspectorSection title="叙事结构">
+                  <p className="section-note">{selected.narrativeSummary}</p>
+                </InspectorSection>
+              </>
+            )}
+          </InspectorPanel>
+        </InspectorShell>
+      </div>
 
       {createOpen ? (
         <CreateTemplateDialog
@@ -154,29 +261,39 @@ export function TemplateLibraryPage() {
   );
 }
 
-function TemplateCard({ template }: { template: TemplateSummary }) {
+function TemplateCard({
+  template,
+  selected,
+  onSelect,
+}: {
+  template: TemplateSummary;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
-    <Link className={`template-card narrative-${template.narrativeId}`} to={`/templates/${template.id}`}>
-      <div className="template-preview" aria-hidden="true">
-        <span className="template-preview-index">{String(template.currentVersion ?? 1).padStart(2, "0")}</span>
-        <span className="template-preview-title">{template.narrativeName.slice(0, 8)}</span>
-        <span className="template-preview-rule" />
-        <span className="template-preview-rule short" />
-        <span className="template-preview-orbit" />
+    <button
+      className={`file-card template-card${selected ? " selected" : ""}`}
+      type="button"
+      aria-pressed={selected}
+      aria-label={`查看模板 ${template.name} 详情`}
+      onClick={onSelect}
+    >
+      <div className="file-card-head">
+        <span className="file-icon" aria-hidden="true">
+          <Icon name={template.kind === "html_deck" ? "slide" : "doc"} />
+        </span>
+        <span className="file-card-heading">
+          <span className="card-title">{template.name}</span>
+          <span className="muted small">{template.narrativeName}</span>
+        </span>
+        <span className={`state-pill ${template.status}`}>{templateStatusLabel(template.status, template.validationStatus)}</span>
       </div>
-      <div className="template-card-body">
-        <div className="card-topline">
-          <span className={`state-pill ${template.status}`}>{templateStatusLabel(template.status, template.validationStatus)}</span>
-          <span className="kind-pill">{kindLabel(template.kind)}</span>
-        </div>
-        <h2>{template.name}</h2>
-        <p>{template.narrativeSummary}</p>
-        <div className="template-card-foot">
-          <span>v{template.currentVersion ?? 1} · {template.narrativeName}</span>
-          <span>打开 →</span>
-        </div>
+      <p className="card-copy">{template.narrativeSummary}</p>
+      <div className="card-footer">
+        <span>v{template.currentVersion ?? 1} · {kindLabel(template.kind)}</span>
+        <span>{validationLabel(template.validationStatus)}</span>
       </div>
-    </Link>
+    </button>
   );
 }
 
@@ -260,6 +377,13 @@ function kindLabel(kind: ContentKind): string {
   return kind === "feishu_doc" ? "飞书文档" : "HTML 演示";
 }
 
+function validationLabel(status: TemplateSummary["validationStatus"]): string {
+  if (status === "passed") return "验证通过";
+  if (status === "failed") return "验证失败";
+  if (status === "queued" || status === "running") return "验证中";
+  return "未验证";
+}
+
 function templateStatusLabel(
   status: TemplateSummary["status"],
   validation: TemplateSummary["validationStatus"],
@@ -269,6 +393,15 @@ function templateStatusLabel(
   if (validation === "failed") return "验证失败";
   if (validation === "queued" || validation === "running") return "验证中";
   return "草稿";
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function parseKindFilter(value: string): "all" | ContentKind {

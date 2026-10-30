@@ -34,7 +34,7 @@ export function TasksDrawer({
   return (
     <Dialog
       title="任务"
-      subtitle="状态来自本机服务。关闭页面或抽屉不会伪造完成，重新打开会先核对真实任务。"
+      subtitle="关闭页面或抽屉不会停止任务，重新打开会先核对任务状态。"
       onClose={onClose}
       wide
     >

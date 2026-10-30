@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CapabilityState } from "@dmall/contracts";
 import {
@@ -9,7 +9,7 @@ import {
   settingsQuery,
   templatesQuery,
 } from "./api.js";
-import { Dialog, ErrorLine, Icon, LoadingLine, StatusRow } from "./ui.js";
+import { Dialog, ErrorLine, Icon, LoadingLine, StatusRow, type IconName } from "./ui.js";
 import { useScanIntentRecovery } from "./features/assets/scan-intents.js";
 import { TasksDrawer } from "./features/assets/TasksDrawer.js";
 import { probeTextProvider, providersQuery, saveProviderConfig } from "./authoring/api.js";
@@ -17,57 +17,99 @@ import { jobQuery } from "./features/assets/api.js";
 
 export function Shell() {
   const navigate = useNavigate();
+  const location = useLocation();
   const health = useQuery(healthQuery);
   useScanIntentRecovery(health.data?.csrfToken);
   const contents = useQuery(contentsQuery);
   const assets = useQuery(assetsQuery);
   const templates = useQuery(templatesQuery);
   const [drawer, setDrawer] = useState<"settings" | "tasks" | null>(null);
+  const crumb = breadcrumbFor(location.pathname);
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <aside className="sidebar" aria-label="主导航">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">D</span>
-          <div>
-            <div className="brand-name">Dmall 内容工作台</div>
-            <div className="brand-sub">CONTENT TO DELIVERY</div>
+          <span className="brand-mark" aria-hidden="true">R</span>
+          <div className="brand-copy">
+            <strong>内容工作台</strong>
+            <span>RECAST</span>
           </div>
         </div>
-        <nav className="topnav" aria-label="一级导航">
-          <CapsuleLink to="/assets" label="素材库" count={assets.data?.total} />
-          <CapsuleLink to="/templates" label="模板库" count={templates.data?.total} />
-          <CapsuleLink to="/contents" label="内容库" count={contents.data?.total} />
+
+        <nav className="nav-group topnav" aria-label="资料与内容">
+          <CapsuleLink to="/assets" label="素材库" icon="assets" count={assets.data?.total} />
+          <CapsuleLink to="/templates" label="模板库" icon="template" count={templates.data?.total} />
+          <CapsuleLink to="/contents" label="内容库" icon="content" count={contents.data?.total} />
         </nav>
-        <div className="top-actions">
-          <button className="icon-button" type="button" onClick={() => setDrawer("tasks")} aria-label="任务">
-            <Icon name="history" />
+
+        <div className="nav-group workflow-nav">
+          <div className="nav-label">工作流</div>
+          <button className="nav-item" type="button" onClick={() => navigate("/compose")}>
+            <Icon name="plus" />
+            <span>新建创作</span>
+            <span />
           </button>
-          <button className="icon-button" type="button" onClick={() => setDrawer("settings")} aria-label="设置">
-            <Icon name="settings" />
-          </button>
-          <span className="local-chip"><span className="status-dot" />本机</span>
         </div>
-      </header>
-      <main className="main-content">
-        <Outlet context={{ openNew: () => navigate("/compose"), openSettings: () => setDrawer("settings"), openTasks: () => setDrawer("tasks"), health: health.data }} />
-      </main>
+
+        <div className="sidebar-spacer" />
+
+        <div className="sidebar-bottom">
+          <div className="local-state">
+            <span className="state-dot" aria-hidden="true" />
+            <span>本机模式</span>
+          </div>
+          <button className="nav-item" type="button" onClick={() => setDrawer("settings")} aria-label="设置">
+            <Icon name="settings" />
+            <span>设置</span>
+            <span />
+          </button>
+        </div>
+      </aside>
+
+      <div className="workspace">
+        <header className="utility-bar">
+          <div className="breadcrumb" aria-label="当前位置">
+            <strong>{crumb.root}</strong>
+            <Icon name="chevron" />
+            <span>{crumb.sub}</span>
+          </div>
+          <div className="utility-actions">
+            <button className="icon-button" type="button" onClick={() => setDrawer("tasks")} aria-label="任务">
+              <Icon name="history" />
+            </button>
+            <span className="local-chip"><span className="status-dot" />本机</span>
+          </div>
+        </header>
+        <main className="main-content">
+          <Outlet context={{ openNew: () => navigate("/compose"), openSettings: () => setDrawer("settings"), openTasks: () => setDrawer("tasks"), health: health.data }} />
+        </main>
+      </div>
       {drawer === "settings" ? <SettingsDrawer csrfToken={health.data?.csrfToken} onClose={() => setDrawer(null)} /> : null}
       {drawer === "tasks" ? <TasksDrawer csrfToken={health.data?.csrfToken} onClose={() => setDrawer(null)} /> : null}
-      <div className="ambient ambient-a" aria-hidden="true" />
-      <div className="ambient ambient-b" aria-hidden="true" />
     </div>
   );
 }
 
-function CapsuleLink({ to, label, count }: { to: string; label: string; count: number | undefined }) {
+function breadcrumbFor(pathname: string): { root: string; sub: string } {
+  if (pathname.startsWith("/assets")) return { root: "素材库", sub: "所有文件" };
+  if (pathname.startsWith("/templates/")) return { root: "模板库", sub: "模板详情" };
+  if (pathname === "/templates") return { root: "模板库", sub: "全部模板" };
+  if (pathname.startsWith("/contents/")) return { root: "内容库", sub: pathname.endsWith("/history") ? "只读历史" : "创作详情" };
+  if (pathname.startsWith("/contents")) return { root: "内容库", sub: "全部内容" };
+  if (pathname.startsWith("/compose")) return { root: "内容库", sub: "新建创作" };
+  return { root: "内容工作台", sub: "本机" };
+}
+
+function CapsuleLink({ to, label, icon, count }: { to: string; label: string; icon: IconName; count: number | undefined }) {
   return (
     <NavLink
       to={to}
       className={({ isActive }) => `capsule-link${isActive ? " active" : ""}`}
     >
-      <span>{label}</span>
-      <span className="capsule-count">{count ?? 0}</span>
+      <Icon name={icon} />
+      <span className="nav-item-label">{label}</span>
+      <span className="capsule-count" aria-hidden="true">{count ?? 0}</span>
     </NavLink>
   );
 }
@@ -83,7 +125,7 @@ function SettingsDrawer({ csrfToken, onClose }: { csrfToken: string | undefined;
   const data = settings.data;
   const localImportEnabled = data !== undefined && data.features.localImport !== "not_implemented_t02";
   return (
-    <Dialog title="设置与能力" subtitle="这里显示真实的本机状态。未配置的能力不会伪装为可用。" onClose={onClose} wide>
+    <Dialog title="设置与能力" subtitle="这里显示本机服务与模型配置状态。" onClose={onClose} wide>
       {settings.isLoading ? <LoadingLine label="正在读取设置" /> : null}
       {settings.isError ? <ErrorLine message={settings.error.message} /> : null}
       {data === undefined ? null : (
@@ -203,7 +245,7 @@ function SettingsDrawer({ csrfToken, onClose }: { csrfToken: string | undefined;
             />
             <StatusRow label="编辑素材标题与标签" value="可用" tone="good" />
             <StatusRow
-              label="模板编辑与真实验证"
+              label="模板编辑与验证"
               value={data.features.templates === "not_implemented_t05" ? "未开放" : "可用"}
               tone={data.features.templates === "not_implemented_t05" ? "muted" : "good"}
             />

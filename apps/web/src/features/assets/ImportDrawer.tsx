@@ -874,7 +874,7 @@ function ConfirmStep({
       ) : null}
 
       <Notice tone="warn" title="文字识别未配置">
-        当前只生成真实文件预览，不生成文字识别结果，也不会调用外部模型。缺图时保留位置和上下文。
+        当前只生成文件预览，不生成文字识别结果，也不会调用外部模型。缺图时保留位置和上下文。
       </Notice>
 
       <label className="confirm-copy">
@@ -1037,7 +1037,7 @@ function ImportingStep({
       </section>
 
       <Notice tone="warn" title="文字识别未配置">
-        当前不生成文字识别结果。视频可播放，GIF 与图片使用真实原件或预览。
+        当前不生成文字识别结果。视频可播放，GIF 与图片使用原件或预览。
       </Notice>
       {actionError === null ? null : <ErrorLine message={actionError} />}
       {terminal ? null : (

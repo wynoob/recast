@@ -29,7 +29,9 @@ test("import drawer scans only after input, traps focus and restores it on Escap
   await expect(start).toBeEnabled();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
-  await page.screenshot({ path: testInfo.outputPath("import-drawer-360.png"), fullPage: true });
+  await expect(page.locator(".dialog-panel")).toHaveCSS("opacity", "1");
+  await expect(page.locator(".dialog-backdrop")).toHaveCSS("opacity", "1");
+  await page.screenshot({ path: testInfo.outputPath("import-drawer-360.png"), fullPage: false, animations: "disabled" });
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(trigger).toBeFocused();
@@ -43,4 +45,13 @@ test("task drawer shows no invented historical jobs", async ({ page }) => {
   await expect(page.getByRole("dialog").getByRole("heading", { name: "还没有任务记录" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
+});
+
+
+test("missing position count comes from occurrences rather than asset total", async ({ page }) => {
+  await page.route(/\/api\/v1\/assets\?/u, (route) => route.fulfill({
+    json: { data: { items: [], total: 0, nextCursor: null, groupCounts: { mp4: 0, gif: 0, image: 0, markdownSources: 1, documentSources: 1, missingOccurrences: 5 } }, requestId: "missing-occurrence-count" },
+  }));
+  await page.goto("/assets");
+  await expect(page.getByText("0 个素材 · 1 份来源文档 · 5 个缺失位置", { exact: true })).toBeVisible();
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AssetSummaryV2, Health, SearchHit, SourceSummary } from "@dmall/contracts";
@@ -17,6 +17,13 @@ import {
 } from "./format.js";
 import { useTaskRecords } from "./task-store.js";
 import { ErrorLine, Icon, LoadingLine } from "../../ui.js";
+import {
+  InspectorFacts,
+  InspectorPanel,
+  InspectorSection,
+  InspectorShell,
+  useInspector,
+} from "../../inspector.js";
 
 interface AssetOutletContext {
   health: Health | undefined;
@@ -24,6 +31,10 @@ interface AssetOutletContext {
 }
 
 type TypeFilter = "all" | "video" | "gif" | "image" | "source";
+type AssetSelection =
+  | { kind: "asset"; id: string }
+  | { kind: "source"; id: string }
+  | { kind: "hit"; handle: string };
 
 export function AssetLibraryPage() {
   const { health, openTasks } = useOutletContext<AssetOutletContext>();
@@ -39,16 +50,17 @@ export function AssetLibraryPage() {
   const [availability, setAvailability] = useState<"all" | "available" | "missing">("all");
   const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
   const [pageIndex, setPageIndex] = useState(0);
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
-  const [selectedSource, setSelectedSource] = useState<{ id: string; versionId: string } | null>(null);
+  const [selection, setSelection] = useState<AssetSelection | null>(null);
+  const [detailAssetId, setDetailAssetId] = useState<string | null>(null);
+  const [sourcePanel, setSourcePanel] = useState<{ id: string; versionId: string } | null>(null);
   const [selectedHandle, setSelectedHandle] = useState<string | null>(null);
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [initialScanId, setInitialScanId] = useState<string | undefined>(undefined);
   const [initialImportId, setInitialImportId] = useState<string | undefined>(undefined);
+  const inspector = useInspector("assets");
 
   const overview = useQuery(assetListQuery({ limit: 1 }));
-  const missing = useQuery(assetListQuery({ state: "missing", limit: 1 }));
   const tasks = useTaskRecords();
 
   useEffect(() => {
@@ -114,11 +126,15 @@ export function AssetLibraryPage() {
     }),
     enabled: query !== "" && searchKey !== null && health !== undefined,
   });
+
+  const assetItems = useMemo(() => list.data?.items ?? [], [list.data]);
+  const sourceItems = useMemo(() => sources.data?.items ?? [], [sources.data]);
+  const hits = useMemo(() => search.data?.hits ?? [], [search.data]);
   const mediaTotal = overview.data === undefined
     ? 0
     : overview.data.groupCounts.mp4 + overview.data.groupCounts.gif + overview.data.groupCounts.image;
-  const unavailable = missing.data?.total;
-  const availableCount = unavailable === undefined ? undefined : Math.max(0, mediaTotal - unavailable);
+  const missingOccurrences = overview.data?.groupCounts.missingOccurrences ?? 0;
+  const documentSources = overview.data?.groupCounts.documentSources ?? 0;
   const filtersActive =
     query !== "" ||
     type !== "all" ||
@@ -126,6 +142,64 @@ export function AssetLibraryPage() {
     merchantFilter !== "" ||
     dateFrom !== "" ||
     dateTo !== "";
+
+  const selectedAsset = selection?.kind === "asset"
+    ? assetItems.find((asset) => asset.id === selection.id) ?? null
+    : null;
+  const selectedSource = selection?.kind === "source"
+    ? sourceItems.find((source) => source.id === selection.id) ?? null
+    : null;
+  const selectedHit = selection?.kind === "hit"
+    ? hits.find((hit) => hit.selectionHandle === selection.handle) ?? null
+    : null;
+
+  const selectionExists = selection === null
+    ? false
+    : selection.kind === "asset"
+      ? assetItems.some((asset) => asset.id === selection.id)
+      : selection.kind === "source"
+        ? sourceItems.some((source) => source.id === selection.id)
+        : hits.some((hit) => hit.selectionHandle === selection.handle);
+
+  useEffect(() => {
+    if (selection !== null && !selectionExists) setSelection(null);
+  }, [selection, selectionExists]);
+
+  useEffect(() => {
+    if (inspector.narrow || inspector.preference !== "expanded" || selection !== null) return;
+    const first = firstSelection();
+    if (first !== null) setSelection(first);
+  }, [assetItems, hits, inspector.narrow, inspector.preference, query, selection, sourceItems, type]);
+
+  function firstSelection(): AssetSelection | null {
+    if (query !== "") {
+      const hit = hits[0];
+      return hit === undefined ? null : { kind: "hit", handle: hit.selectionHandle };
+    }
+    if (type === "source") {
+      const source = sourceItems[0];
+      return source === undefined ? null : { kind: "source", id: source.id };
+    }
+    const asset = assetItems[0];
+    return asset === undefined ? null : { kind: "asset", id: asset.id };
+  }
+
+  const select = (next: AssetSelection) => {
+    setSelection(next);
+    if (inspector.narrow) inspector.open();
+  };
+
+  const revealInspector = () => {
+    if (inspector.expanded) {
+      inspector.close();
+      return;
+    }
+    if (selection === null) {
+      const first = firstSelection();
+      if (first !== null) setSelection(first);
+    }
+    inspector.open();
+  };
 
   const closeImport = () => {
     setImportOpen(false);
@@ -142,28 +216,65 @@ export function AssetLibraryPage() {
   const changeType = (next: TypeFilter) => {
     setType(next);
     setSourceNotice(null);
+    setSelection(null);
     setCursorStack([null]);
     setPageIndex(0);
   };
 
-  const openSource = (source: SourceSummary) => {
+  const selectSource = (source: SourceSummary) => {
+    select({ kind: "source", id: source.id });
     if (source.currentVersionId === null) {
       setSourceNotice("该来源没有可打开的版本");
       return;
     }
     setSourceNotice(null);
-    setSelectedSource({ id: source.id, versionId: source.currentVersionId });
   };
+
+  const openSourcePanel = (source: SourceSummary) => {
+    if (source.currentVersionId === null) {
+      setSourceNotice("该来源没有可打开的版本");
+      return;
+    }
+    setSourceNotice(null);
+    setSourcePanel({ id: source.id, versionId: source.currentVersionId });
+  };
+
+  const hitCount = hits.length;
+  const countLabel = query !== ""
+    ? `${hitCount} 条命中`
+    : type === "source"
+      ? `${sources.data?.total ?? 0} 份来源文档`
+      : `${list.data?.total ?? 0} 个素材`;
+  const inspectorMeta = selectedAsset !== null
+    ? `${mediaKindLabel(selectedAsset.mediaKind)} · ${formatBytes(selectedAsset.bytes)}`
+    : selectedSource !== null
+      ? `${sourceKindLabel(selectedSource.kind)} · ${selectedSource.occurrenceCount} 处引用`
+      : selectedHit === null
+        ? "未选择"
+        : selectedHit.reason;
+  const inspectorTitle = selectedAsset?.title ?? selectedSource?.title ?? selectedHit?.sourceTitle ?? selectedHit?.factId ?? undefined;
+
+  function typeCount(value: TypeFilter): number {
+    if (overview.data === undefined) return 0;
+    const counts = overview.data.groupCounts;
+    if (value === "video") return counts.mp4;
+    if (value === "gif") return counts.gif;
+    if (value === "image") return counts.image;
+    if (value === "source") return counts.documentSources;
+    return counts.mp4 + counts.gif + counts.image;
+  }
 
   return (
     <div className="page">
-      <div className="page-header">
+      <header className="page-head">
         <div>
-          <span className="eyebrow">素材库</span>
-          <h1>让证据随时可找</h1>
-          <p>素材按真实文件记录，保留来源、章节上下文和每次出现位置。没有示例素材。</p>
+          <h1>素材库</h1>
+          <span className="page-summary">
+            {mediaTotal} 个素材 · {documentSources} 份来源文档
+            {missingOccurrences > 0 ? ` · ${missingOccurrences} 个缺失位置` : ""}
+          </span>
         </div>
-        <div>
+        <div className="page-actions">
           <button
             className="button primary"
             type="button"
@@ -175,68 +286,78 @@ export function AssetLibraryPage() {
             导入素材
           </button>
         </div>
-      </div>
+      </header>
 
-      <div className="metric-grid">
-        <Metric label="本地媒体" value={overview.data === undefined ? "…" : String(mediaTotal)} hint={`${overview.data?.groupCounts.mp4 ?? 0} MP4 · ${overview.data?.groupCounts.gif ?? 0} GIF · ${overview.data?.groupCounts.image ?? 0} 图片`} />
-        <Metric label="可用预览" value={availableCount === undefined ? "…" : String(availableCount)} hint="原件与预览均可读取" />
-        <Metric label="来源文档" value={overview.data === undefined ? "…" : String(overview.data.groupCounts.documentSources)} hint={`${overview.data?.groupCounts.missingOccurrences ?? 0} 个缺失位置`} />
-        <Metric label="任务记录" value={String(tasks.length)} hint="只存任务编号，状态从服务端核对" />
-      </div>
-
-      <section className="asset-toolbar" aria-label="素材筛选">
-        <label className="asset-search">
+      <div className="toolbar" aria-label="素材筛选">
+        <label className="search-box">
+          <Icon name="search" />
           <span className="sr-only">搜索正文、标题或标签</span>
-          <Icon name="source" />
           <input
             value={searchText}
             disabled={type === "source"}
             onChange={(event) => setSearchText(event.target.value)}
             placeholder="搜索正文、标题或标签"
+            type="search"
+            autoComplete="off"
           />
         </label>
-        <div className="seg" role="group" aria-label="素材类型">
-          <FilterButton active={type === "all"} onClick={() => changeType("all")}>全部</FilterButton>
-          <FilterButton active={type === "video"} onClick={() => changeType("video")}>视频</FilterButton>
-          <FilterButton active={type === "gif"} onClick={() => changeType("gif")}>GIF</FilterButton>
-          <FilterButton active={type === "image"} onClick={() => changeType("image")}>图片</FilterButton>
-          <FilterButton active={type === "source"} onClick={() => changeType("source")}>来源文档</FilterButton>
+        <div className="filter-group" role="group" aria-label="素材类型">
+          <span className="filter-label">类型</span>
+          {(["all", "video", "gif", "image", "source"] as const).map((value) => (
+            <button
+              className="filter-chip"
+              type="button"
+              key={value}
+              aria-pressed={type === value}
+              onClick={() => changeType(value)}
+            >
+              {typeLabel(value)}
+              <span className="filter-count" aria-hidden="true">{typeCount(value)}</span>
+            </button>
+          ))}
         </div>
-        <label className="asset-state">
-          <span className="sr-only">可用状态</span>
+        <label className="select-wrap">
+          <span>状态</span>
           <select
             value={availability}
             disabled={type === "source"}
             onChange={(event) => {
-              setAvailability(event.target.value as "all" | "available" | "missing");
+              setAvailability(parseAvailability(event.target.value));
+              setSelection(null);
               setCursorStack([null]);
               setPageIndex(0);
             }}
+            aria-label="素材可用状态"
           >
             <option value="all">全部状态</option>
             <option value="available">可用</option>
             <option value="missing">缺失</option>
           </select>
         </label>
-        <label className="asset-state">
-          <span className="sr-only">商家 UUID</span>
-          <input
-            value={merchantFilter}
-            disabled={type === "source" && query === ""}
-            onChange={(event) => setMerchantFilter(event.target.value)}
-            placeholder="商家 UUID（可选）"
-            spellCheck={false}
-          />
-        </label>
-        <label className="asset-state">
-          <span className="sr-only">记录日期从</span>
-          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-        </label>
-        <label className="asset-state">
-          <span className="sr-only">记录日期到</span>
-          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-        </label>
-      </section>
+        <details className="advanced-filters">
+          <summary>更多筛选</summary>
+          <div className="advanced-filter-fields">
+            <label className="field">
+              <span>商家 UUID（可选）</span>
+              <input
+                value={merchantFilter}
+                disabled={type === "source" && query === ""}
+                onChange={(event) => setMerchantFilter(event.target.value)}
+                placeholder="商家 UUID"
+                spellCheck={false}
+              />
+            </label>
+            <label className="field">
+              <span>记录日期从</span>
+              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>记录日期到</span>
+              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            </label>
+          </div>
+        </details>
+      </div>
 
       {overview.isError ? <ErrorLine message={overview.error.message} /> : null}
       {sourceNotice === null ? null : (
@@ -245,122 +366,277 @@ export function AssetLibraryPage() {
           <div>{sourceNotice}</div>
         </div>
       )}
-      {query !== "" ? (
-        <SearchResults
-          query={query}
-          loading={search.isLoading}
-          error={search.isError ? search.error.message : null}
-          hits={search.data?.hits ?? []}
-          capability={search.data?.capabilities.message ?? null}
-          onOpen={setSelectedHandle}
-        />
-      ) : null}
-      {query === "" && (type === "source" ? sources.isLoading : list.isLoading) ? (
-        <section className="panel">
-          <LoadingLine label={type === "source" ? "正在读取来源文档" : "正在读取素材库"} />
-        </section>
-      ) : null}
-      {query === "" && type === "source" && sources.isError ? (
-        <section className="panel">
-          <ErrorLine message="来源文档暂时无法读取" />
-          <div className="dialog-actions">
-            <button className="button small" type="button" onClick={() => { void sources.refetch(); }}>重试</button>
-          </div>
-        </section>
-      ) : null}
-      {query === "" && type !== "source" && list.isError ? <section className="panel"><ErrorLine message={list.error.message} /></section> : null}
 
-      {query === "" && type !== "source" && list.data !== undefined && overview.data?.total === 0 ? (
-        <section className="empty-panel">
-          <span className="empty-icon" aria-hidden="true">▧</span>
-          <h2>素材库为空</h2>
-          <p>还没有真实素材。导入前只做只读扫描；确认后才会复制文件。这里不会展示虚构卡片。</p>
-          <button className="button primary" type="button" onClick={() => setImportOpen(true)}>＋ 导入第一份素材</button>
-        </section>
-      ) : null}
+      <div className="result-bar">
+        <span>
+          <strong>{countLabel}</strong>
+          {filtersActive ? <span className="result-note"> · 已筛选</span> : null}
+          {tasks.length > 0 ? <span className="result-note"> · {tasks.length} 个本机任务</span> : null}
+        </span>
+        <div className="result-actions">
+          <span className="result-note">{type === "source" ? "按最近更新" : "按最近导入"}</span>
+          <button
+            className="button small inspector-toggle"
+            type="button"
+            aria-expanded={inspector.expanded}
+            aria-controls="asset-inspector"
+            onClick={revealInspector}
+          >
+            {inspector.expanded ? "收起详情" : "展开详情"}
+          </button>
+        </div>
+      </div>
 
-      {query === "" && type === "source" && sources.data !== undefined && !sources.isLoading ? (
-        sources.data.items.length === 0 ? (
-          <section className="empty-panel">
-            <span className="empty-icon" aria-hidden="true">▤</span>
-            <h2>还没有来源文档</h2>
-            <p>导入 Markdown 文档后会在这里按真实来源列出。</p>
-          </section>
-        ) : (
-          <>
-            <SourceRows items={sources.data.items} onOpen={openSource} />
-            <div className="pager">
-              <span className="muted small">共 {sources.data.total} 份来源文档 · 第 {pageIndex + 1} 页</span>
-              <div className="pager-actions">
-                <button
-                  className="button small"
-                  type="button"
-                  disabled={pageIndex === 0}
-                  onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
-                >
-                  上一页
-                </button>
-                <button
-                  className="button small"
-                  type="button"
-                  disabled={sources.data.nextCursor === null}
-                  onClick={() => {
+      <div className={`layout${inspector.expanded ? "" : " collapsed"}`}>
+        <div className="library-list">
+          {query !== "" ? (
+            <SearchHitList
+              query={query}
+              loading={search.isLoading}
+              error={search.isError ? search.error.message : null}
+              hits={hits}
+              capability={search.data?.capabilities.message ?? null}
+              selectedHandle={selectedHit?.selectionHandle ?? null}
+              onSelect={(handle) => select({ kind: "hit", handle })}
+            />
+          ) : null}
+
+          {query === "" && (type === "source" ? sources.isLoading : list.isLoading) ? (
+            <LoadingLine label={type === "source" ? "正在读取来源文档" : "正在读取素材库"} />
+          ) : null}
+
+          {query === "" && type === "source" && sources.isError ? (
+            <section className="panel">
+              <ErrorLine message="来源文档暂时无法读取" />
+              <div className="dialog-actions">
+                <button className="button small" type="button" onClick={() => { void sources.refetch(); }}>重试</button>
+              </div>
+            </section>
+          ) : null}
+          {query === "" && type !== "source" && list.isError ? <ErrorLine message={list.error.message} /> : null}
+
+          {query === "" && type !== "source" && list.data !== undefined && overview.data?.total === 0 ? (
+            <section className="empty-panel">
+              <span className="empty-icon" aria-hidden="true">▧</span>
+              <h2>素材库为空</h2>
+              <p>还没有素材。导入前只做只读扫描；确认后才会复制文件。</p>
+              <button className="button primary" type="button" onClick={() => setImportOpen(true)}>导入第一份素材</button>
+            </section>
+          ) : null}
+
+          {query === "" && type === "source" && sources.data !== undefined && !sources.isLoading ? (
+            sourceItems.length === 0 ? (
+              <section className="empty-panel">
+                <span className="empty-icon" aria-hidden="true">▤</span>
+                <h2>还没有来源文档</h2>
+                <p>导入 Markdown 文档后会在这里按来源列出。</p>
+              </section>
+            ) : (
+              <>
+                <SourceRows
+                  items={sourceItems}
+                  selectedId={selectedSource?.id ?? null}
+                  onSelect={selectSource}
+                />
+                <Pager
+                  label={`共 ${sources.data.total} 份来源文档 · 第 ${pageIndex + 1} 页`}
+                  canPrevious={pageIndex > 0}
+                  nextCursor={sources.data.nextCursor}
+                  onPrevious={() => setPageIndex((value) => Math.max(0, value - 1))}
+                  onNext={() => {
                     if (sources.data.nextCursor === null) return;
                     setCursorStack((stack) => [...stack.slice(0, pageIndex + 1), sources.data?.nextCursor ?? null]);
                     setPageIndex((value) => value + 1);
                   }}
-                >
-                  下一页
-                </button>
-              </div>
-            </div>
-          </>
-        )
-      ) : null}
+                />
+              </>
+            )
+          ) : null}
 
-      {query === "" && type !== "source" && list.data !== undefined && overview.data?.total !== 0 && !list.isLoading ? (
-        list.data.items.length === 0 ? (
-          <EmptyFiltered onClear={() => { setSearchText(""); setQuery(""); changeType("all"); setAvailability("all"); }} />
-        ) : (
-          <>
-            <AssetGrid items={list.data.items} onOpen={setSelectedAssetId} />
-            <div className="pager">
-              <span className="muted small">共 {list.data.total} 项 · 第 {pageIndex + 1} 页{filtersActive ? "（已筛选）" : ""}</span>
-              <div className="pager-actions">
-                <button
-                  className="button small"
-                  type="button"
-                  disabled={pageIndex === 0}
-                  onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
-                >
-                  上一页
-                </button>
-                <button
-                  className="button small"
-                  type="button"
-                  disabled={list.data.nextCursor === null}
-                  onClick={() => {
+          {query === "" && type !== "source" && list.data !== undefined && overview.data?.total !== 0 && !list.isLoading ? (
+            assetItems.length === 0 ? (
+              <EmptyFiltered onClear={() => { setSearchText(""); setQuery(""); changeType("all"); setAvailability("all"); }} />
+            ) : (
+              <>
+                <AssetGrid
+                  items={assetItems}
+                  selectedId={selectedAsset?.id ?? null}
+                  onSelect={(id) => select({ kind: "asset", id })}
+                />
+                <Pager
+                  label={`共 ${list.data.total} 项 · 第 ${pageIndex + 1} 页${filtersActive ? "（已筛选）" : ""}`}
+                  canPrevious={pageIndex > 0}
+                  nextCursor={list.data.nextCursor}
+                  onPrevious={() => setPageIndex((value) => Math.max(0, value - 1))}
+                  onNext={() => {
                     if (list.data.nextCursor === null) return;
                     setCursorStack((stack) => [...stack.slice(0, pageIndex + 1), list.data?.nextCursor ?? null]);
                     setPageIndex((value) => value + 1);
                   }}
-                >
-                  下一页
-                </button>
-              </div>
-            </div>
-          </>
-        )
-      ) : null}
+                />
+              </>
+            )
+          ) : null}
+        </div>
 
-      {selectedAssetId !== null && health !== undefined ? (
-        <AssetDetailDrawer assetId={selectedAssetId} csrfToken={health.csrfToken} onClose={() => setSelectedAssetId(null)} />
+        <InspectorShell
+          open={inspector.expanded}
+          narrow={inspector.narrow}
+          label="素材详情"
+          onClose={inspector.close}
+        >
+          <InspectorPanel
+            id="asset-inspector"
+            label="素材检查器"
+            meta={inspectorMeta}
+            title={inspectorTitle}
+            subtitle={
+              selectedAsset !== null
+                ? `${formatDimensions(selectedAsset.width, selectedAsset.height)} · ${originSummaryLabel(selectedAsset.origins)}`
+                : selectedSource !== null
+                  ? `${sourceKindLabel(selectedSource.kind)} · ${selectedSource.currentVersionId === null ? "没有可打开的版本" : "当前版本可打开"}`
+                  : selectedHit !== null
+                    ? `${selectedHit.refType === "fact" ? "事实版本" : sourceKindLabel(selectedHit.sourceKind ?? "")} · ${locatorSummary(selectedHit.locators)}`
+                    : undefined
+            }
+            preview={
+              selectedAsset !== null ? (
+                selectedAsset.posterFileUrl === null
+                  ? <div className="inspector-art"><Icon name={selectedAsset.mediaKind === "video" ? "video" : selectedAsset.mediaKind === "gif" ? "gif" : "image"} /></div>
+                  : <img src={selectedAsset.posterFileUrl} alt="" />
+              ) : selectedSource !== null ? (
+                <div className="inspector-art"><Icon name="source" /></div>
+              ) : (
+                <div className="inspector-art"><Icon name="search" /></div>
+              )
+            }
+            closeLabel="关闭素材详情"
+            onClose={inspector.close}
+            emptyTitle={query !== "" ? "没有命中的记录" : type === "source" ? "没有可查看的来源" : "没有可查看的素材"}
+            emptyCopy={query !== "" ? "调整关键词或筛选后重试。" : "选择一条记录后，这里显示摘要与可用操作。"}
+            actions={
+              selectedAsset !== null ? (
+                <>
+                  <button
+                    className="button primary"
+                    type="button"
+                    disabled={health === undefined}
+                    onClick={() => setDetailAssetId(selectedAsset.id)}
+                  >
+                    编辑标题与标签
+                  </button>
+                  {selectedAsset.originalFileUrl === null ? null : (
+                    <a className="button secondary" href={selectedAsset.originalFileUrl} target="_blank" rel="noreferrer">打开原文件</a>
+                  )}
+                </>
+              ) : selectedSource !== null ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={selectedSource.currentVersionId === null}
+                  onClick={() => openSourcePanel(selectedSource)}
+                >
+                  打开来源上下文
+                </button>
+              ) : selectedHit !== null ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  onClick={() => setSelectedHandle(selectedHit.selectionHandle)}
+                >
+                  打开完整上下文
+                </button>
+              ) : undefined
+            }
+          >
+            {selectedAsset !== null ? (
+              <>
+                <InspectorSection title="文件">
+                  <InspectorFacts
+                    rows={[
+                      { label: "类型", value: `${mediaKindLabel(selectedAsset.mediaKind)} · ${selectedAsset.mime}` },
+                      { label: "尺寸", value: formatDimensions(selectedAsset.width, selectedAsset.height) },
+                      { label: "大小", value: formatBytes(selectedAsset.bytes) },
+                      ...(selectedAsset.durationMs === null ? [] : [{ label: "时长", value: formatDurationMs(selectedAsset.durationMs) }]),
+                      { label: "状态", value: selectedAsset.availability === "available" ? "可用" : "不可用" },
+                    ]}
+                  />
+                </InspectorSection>
+                <InspectorSection title="归属">
+                  <InspectorFacts
+                    rows={[
+                      { label: "来源", value: `${selectedAsset.sourceCount} 个` },
+                      { label: "出现位置", value: `${selectedAsset.occurrenceCount} 处` },
+                      { label: "标题来源", value: selectedAsset.origins.title === "manual" ? "人工编辑" : "来源文档" },
+                      { label: "标签来源", value: selectedAsset.origins.tags === "manual" ? "人工编辑" : "来源文档" },
+                      { label: "导入", value: formatDate(selectedAsset.createdAt) },
+                    ]}
+                  />
+                </InspectorSection>
+                <InspectorSection title="标签">
+                  {selectedAsset.tags.length === 0 ? (
+                    <p className="section-note">暂无标签。</p>
+                  ) : (
+                    <div className="asset-tags">
+                      {selectedAsset.tags.map((tag) => <span className="asset-tag" key={tag}>{tag}</span>)}
+                    </div>
+                  )}
+                </InspectorSection>
+              </>
+            ) : null}
+            {selectedSource !== null ? (
+              <>
+                <InspectorSection title="来源">
+                  <InspectorFacts
+                    rows={[
+                      { label: "类型", value: sourceKindLabel(selectedSource.kind) },
+                      { label: "状态", value: selectedSource.status === "archived" ? "已归档" : "可用" },
+                      { label: "出现位置", value: `${selectedSource.occurrenceCount} 处` },
+                      { label: "关联素材", value: `${selectedSource.linkedAssetCount} 个` },
+                      { label: "缺失位置", value: `${selectedSource.missingOccurrenceCount} 处` },
+                      { label: "最近更新", value: formatDate(selectedSource.updatedAt) },
+                    ]}
+                  />
+                </InspectorSection>
+                <InspectorSection title="下一步">
+                  <p className="section-note">
+                    {selectedSource.currentVersionId === null
+                      ? "当前来源没有可读取的版本，无法打开章节上下文。"
+                      : "打开来源上下文，查看章节、前后文和原图位置。"}
+                  </p>
+                </InspectorSection>
+              </>
+            ) : null}
+            {selectedHit !== null ? (
+              <>
+                <InspectorSection title="命中">
+                  <InspectorFacts
+                    rows={[
+                      { label: "类型", value: selectedHit.refType === "fact" ? "事实版本" : sourceKindLabel(selectedHit.sourceKind ?? "") },
+                      { label: "原因", value: selectedHit.reason },
+                      { label: "位置", value: locatorSummary(selectedHit.locators) },
+                      { label: "正文块", value: selectedHit.blockIds.length === 0 ? "标题命中" : `${selectedHit.blockIds.length} 个` },
+                      ...(selectedHit.keywordRank === null ? [] : [{ label: "关键词排名", value: `第 ${selectedHit.keywordRank} 名` }]),
+                    ]}
+                  />
+                </InspectorSection>
+                <InspectorSection title="命中文本">
+                  <p className="context-text">{selectedHit.matchedText}</p>
+                </InspectorSection>
+              </>
+            ) : null}
+          </InspectorPanel>
+        </InspectorShell>
+      </div>
+
+      {detailAssetId !== null && health !== undefined ? (
+        <AssetDetailDrawer assetId={detailAssetId} csrfToken={health.csrfToken} onClose={() => setDetailAssetId(null)} />
       ) : null}
-      {selectedSource === null ? null : (
+      {sourcePanel === null ? null : (
         <SourceContextPanel
-          sourceId={selectedSource.id}
-          versionId={selectedSource.versionId}
-          onClose={() => setSelectedSource(null)}
+          sourceId={sourcePanel.id}
+          versionId={sourcePanel.versionId}
+          onClose={() => setSourcePanel(null)}
         />
       )}
       {selectedHandle === null ? null : (
@@ -369,7 +645,7 @@ export function AssetLibraryPage() {
           onClose={() => setSelectedHandle(null)}
           onOpenSource={(sourceId, versionId) => {
             setSelectedHandle(null);
-            setSelectedSource({ id: sourceId, versionId });
+            setSourcePanel({ id: sourceId, versionId });
           }}
         />
       )}
@@ -391,11 +667,27 @@ export function AssetLibraryPage() {
   );
 }
 
-function AssetGrid({ items, onOpen }: { items: AssetSummaryV2[]; onOpen: (id: string) => void }) {
+function AssetGrid({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: AssetSummaryV2[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
   return (
-    <section className="asset-grid" aria-label="素材列表">
+    <section className="library-grid" aria-label="素材列表">
       {items.map((asset) => (
-        <button className="asset-card" type="button" key={asset.id} data-asset-id={asset.id} onClick={() => onOpen(asset.id)}>
+        <button
+          className={`file-card asset-card${selectedId === asset.id ? " selected" : ""}`}
+          type="button"
+          key={asset.id}
+          data-asset-id={asset.id}
+          aria-pressed={selectedId === asset.id}
+          aria-label={`查看 ${asset.title} 详情`}
+          onClick={() => onSelect(asset.id)}
+        >
           <span className="asset-thumb">
             {asset.posterFileUrl === null ? (
               <span className="asset-thumb-fallback"><Icon name={asset.mediaKind === "video" ? "video" : asset.mediaKind === "gif" ? "gif" : "image"} /></span>
@@ -407,7 +699,7 @@ function AssetGrid({ items, onOpen }: { items: AssetSummaryV2[]; onOpen: (id: st
             {asset.availability === "available" ? null : <span className="asset-warning">待补齐</span>}
           </span>
           <span className="asset-card-body">
-            <strong>{asset.title}</strong>
+            <strong className="card-title">{asset.title}</strong>
             <small>
               {asset.mediaKind === "video"
                 ? `${formatDurationMs(asset.durationMs)} · ${formatDimensions(asset.width, asset.height)}`
@@ -428,11 +720,26 @@ function AssetGrid({ items, onOpen }: { items: AssetSummaryV2[]; onOpen: (id: st
   );
 }
 
-function SourceRows({ items, onOpen }: { items: SourceSummary[]; onOpen: (source: SourceSummary) => void }) {
+function SourceRows({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: SourceSummary[];
+  selectedId: string | null;
+  onSelect: (source: SourceSummary) => void;
+}) {
   return (
     <section className="source-list" aria-label="来源文档列表">
       {items.map((source) => (
-        <button className="source-row" type="button" key={source.id} data-source-id={source.id} onClick={() => onOpen(source)}>
+        <button
+          className={`source-row${selectedId === source.id ? " selected" : ""}`}
+          type="button"
+          key={source.id}
+          data-source-id={source.id}
+          aria-pressed={selectedId === source.id}
+          onClick={() => onSelect(source)}
+        >
           <span className="source-main">
             <strong>{source.title === "" ? "未命名来源" : source.title}</strong>
             <small>
@@ -452,23 +759,25 @@ function SourceRows({ items, onOpen }: { items: SourceSummary[]; onOpen: (source
   );
 }
 
-function SearchResults({
+function SearchHitList({
   query,
   loading,
   error,
   hits,
   capability,
-  onOpen,
+  selectedHandle,
+  onSelect,
 }: {
   query: string;
   loading: boolean;
   error: string | null;
   hits: SearchHit[];
   capability: string | null;
-  onOpen: (handle: string) => void;
+  selectedHandle: string | null;
+  onSelect: (handle: string) => void;
 }) {
   return (
-    <section className="panel search-results" aria-label="全文检索结果">
+    <section className="search-results" aria-label="全文检索结果">
       <div className="panel-title-row">
         <div>
           <span className="eyebrow">关键词检索</span>
@@ -490,10 +799,11 @@ function SearchResults({
         <div className="source-list">
           {hits.map((hit) => (
             <button
-              className="source-row search-hit"
+              className={`source-row search-hit${selectedHandle === hit.selectionHandle ? " selected" : ""}`}
               type="button"
               key={hit.selectionHandle}
-              onClick={() => onOpen(hit.selectionHandle)}
+              aria-pressed={selectedHandle === hit.selectionHandle}
+              onClick={() => onSelect(hit.selectionHandle)}
             >
               <span className="source-main">
                 <strong>{hit.sourceTitle ?? hit.factId ?? "事实命中"}</strong>
@@ -511,6 +821,53 @@ function SearchResults({
       )}
     </section>
   );
+}
+
+function Pager({
+  label,
+  canPrevious,
+  nextCursor,
+  onPrevious,
+  onNext,
+}: {
+  label: string;
+  canPrevious: boolean;
+  nextCursor: string | null;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className="pager">
+      <span className="muted small">{label}</span>
+      <div className="pager-actions">
+        <button className="button small" type="button" disabled={!canPrevious} onClick={onPrevious}>上一页</button>
+        <button className="button small" type="button" disabled={nextCursor === null} onClick={onNext}>下一页</button>
+      </div>
+    </div>
+  );
+}
+
+function EmptyFiltered({ onClear }: { onClear: () => void }) {
+  return (
+    <section className="empty-panel">
+      <span className="empty-icon" aria-hidden="true">⌕</span>
+      <h2>没有符合条件的素材</h2>
+      <p>当前筛选没有结果。清空筛选后可以继续查看已导入素材。</p>
+      <button className="button" type="button" onClick={onClear}>清空筛选</button>
+    </section>
+  );
+}
+
+function typeLabel(value: TypeFilter): string {
+  if (value === "video") return "视频";
+  if (value === "gif") return "GIF";
+  if (value === "image") return "图片";
+  if (value === "source") return "来源文档";
+  return "全部";
+}
+
+function parseAvailability(value: string): "all" | "available" | "missing" {
+  return value === "available" || value === "missing" ? value : "all";
 }
 
 function locatorShortLabel(locator: SearchHit["locators"][number]): string {
@@ -537,21 +894,11 @@ function locatorSummary(locators: SearchHit["locators"]): string {
   return `${labels.slice(0, 5).join(" · ")} 等 ${labels.length} 处`;
 }
 
-function FilterButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return <button type="button" className={active ? "on" : ""} aria-pressed={active} onClick={onClick}>{children}</button>;
-}
-
-function Metric({ label, value, hint }: { label: string; value: string; hint: string }) {
-  return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small>{hint}</small></div>;
-}
-
-function EmptyFiltered({ onClear }: { onClear: () => void }) {
-  return (
-    <section className="empty-panel">
-      <span className="empty-icon" aria-hidden="true">⌕</span>
-      <h2>没有符合条件的素材</h2>
-      <p>当前筛选没有真实结果。清空筛选后可以继续查看已导入素材。</p>
-      <button className="button" type="button" onClick={onClear}>清空筛选</button>
-    </section>
-  );
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }

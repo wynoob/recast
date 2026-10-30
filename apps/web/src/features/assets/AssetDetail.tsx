@@ -286,7 +286,7 @@ export function AssetDetailDrawer({
 
           <div className="notice warn">
             <Icon name="info" />
-            <div><b>文字识别未配置。</b><br />当前不显示识别文本。视频可播放，图片与动图使用真实原件或预览。</div>
+            <div><b>文字识别未配置。</b><br />当前不显示识别文本。视频可播放，图片与动图使用原件或预览。</div>
           </div>
           <div className="dialog-actions">
             <button className="button" type="button" onClick={onClose}>关闭</button>

@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { Locator, SelectionView } from "@dmall/contracts";
 import { selectionQuery } from "./api.js";
@@ -16,8 +17,9 @@ export function SelectionPanel({
   const panel = useRef<HTMLDivElement>(null);
   useLayerFocus(panel, onClose);
   const selection = useQuery(selectionQuery(handleId));
-  return (
-    <div ref={panel} tabIndex={-1} className="source-overlay selection-overlay" role="region" aria-label="检索选择详情">
+  return createPortal(
+    <div className="source-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div ref={panel} tabIndex={-1} className="source-overlay selection-overlay" role="dialog" aria-modal="true" aria-label="检索选择详情">
       <div className="source-overlay-head">
         <div>
           <span className="eyebrow">命中来源</span>
@@ -33,6 +35,8 @@ export function SelectionPanel({
         <SelectionContent selection={selection.data} onOpenSource={onOpenSource} />
       )}
     </div>
+    </div>,
+    document.body,
   );
 }
 

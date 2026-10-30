@@ -29,6 +29,9 @@ test("creates, edits, validates and reopens template versions", async ({ page },
   await expect(page.locator(".state-pill.ready")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("验证通过", { exact: true })).toBeVisible();
   await expect(page.locator(".validation-issue")).toHaveCount(0);
+  const validationText = page.locator(".validation-check small").first();
+  await expect(validationText).toBeVisible();
+  expect(await validationText.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(14);
 
   const versionSelect = page.locator(".version-select select");
   const options = await versionSelect.locator("option").allTextContents();

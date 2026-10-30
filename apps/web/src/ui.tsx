@@ -18,7 +18,17 @@ export type IconName =
   | "info"
   | "upload"
   | "source"
-  | "refresh";
+  | "refresh"
+  | "assets"
+  | "template"
+  | "content"
+  | "plus"
+  | "search"
+  | "chevron"
+  | "filter"
+  | "edit"
+  | "download"
+  | "play";
 
 const focusLayers: Array<{ panel: RefObject<HTMLElement | null> }> = [];
 const FOCUSABLE = "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex='-1'])";
@@ -116,13 +126,14 @@ export function Dialog({
       >
         <div className="dialog-head">
           <div>
-            <span className="eyebrow">LOCAL WORKBENCH</span>
             <h2 id={titleId}>{title}</h2>
             <p>{subtitle}</p>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">×</button>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭">
+            <Icon name="close" />
+          </button>
         </div>
-        {children}
+        <div className="dialog-body">{children}</div>
       </section>
     </div>,
     document.body,
@@ -173,6 +184,16 @@ export function Icon({ name }: { name: IconName }) {
     upload: <><path d="M8 10.8V3.2M5.2 6l2.8-2.8L10.8 6M3 11.2v1.6h10v-1.6" /></>,
     source: <><path d="M3 4.2h4.2l1.1 1.3H13v6.3H3z" /><path d="M6 8.2h4M6 10.2h3" /></>,
     refresh: <><path d="M12.6 5.1A5.2 5.2 0 1 0 13 9.4" /><path d="M13 2.8v2.7h-2.7" /></>,
+    assets: <><rect x="2.2" y="3" width="11.6" height="10" rx="1.4" /><path d="M2.2 6.2h11.6M5.6 3v3.2" /></>,
+    template: <><rect x="2.2" y="2.8" width="11.6" height="10.4" rx="1.3" /><path d="M2.2 5.8h11.6M6.3 5.8v7.4" /></>,
+    content: <><path d="M4 2.4h5.2L12 5.2v8.4H4z" /><path d="M9.2 2.4v2.8H12M6 7.4h4M6 9.6h4M6 11.6h2.6" /></>,
+    plus: <><path d="M8 3.2v9.6M3.2 8h9.6" /></>,
+    search: <><circle cx="7.2" cy="7.2" r="4.2" /><path d="m10.4 10.4 2.8 2.8" /></>,
+    chevron: <><path d="m6 3.5 4.5 4.5L6 12.5" /></>,
+    filter: <><path d="M2.6 3.4h10.8L9.2 8.2v4.2l-2.4 1.2V8.2z" /></>,
+    edit: <><path d="M3 13h2.4l7-7-2.4-2.4-7 7z" /><path d="m9.6 3.2 2.4 2.4" /></>,
+    download: <><path d="M8 2.8v7.4M5.2 7.4 8 10.2l2.8-2.8M3 12.4h10" /></>,
+    play: <><path d="M5.2 3.4 12 8l-6.8 4.6z" /></>,
   };
   return (
     <svg className="icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

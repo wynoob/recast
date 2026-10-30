@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { AssetOccurrenceView } from "@dmall/contracts";
 import { sourceContextQuery } from "./api.js";
@@ -23,8 +24,9 @@ export function SourceContextPanel({
   });
 
   const shown = source.data === undefined ? (occurrences ?? []) : source.data.occurrences;
-  return (
-    <div ref={panel} tabIndex={-1} className="source-overlay" role="region" aria-label="来源文档上下文">
+  return createPortal(
+    <div className="source-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div ref={panel} tabIndex={-1} className="source-overlay" role="dialog" aria-modal="true" aria-label="来源文档上下文">
       <div className="source-overlay-head">
         <div>
           <span className="eyebrow">来源上下文</span>
@@ -118,6 +120,8 @@ export function SourceContextPanel({
         ))}
       </div>
     </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -11,7 +11,7 @@ test("three routes fit 360, 728 and 1280 without horizontal overflow", async ({ 
       await expect(page.locator("nav.topnav .capsule-link")).toHaveCount(3);
       if (route === "contents") await expect(page.getByRole("heading", { name: "内容列表为空" })).toBeVisible();
       if (route === "assets") await expect(page.getByRole("heading", { name: "素材库为空" })).toBeVisible();
-      if (route === "templates") await expect(page.getByRole("heading", { name: "让结构先站稳" })).toBeVisible();
+      if (route === "templates") await expect(page.getByRole("heading", { name: "模板库", exact: true })).toBeVisible();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
       expect(overflow).toBe(false);
       await page.waitForTimeout(450);
@@ -45,4 +45,20 @@ test("settings drawer closes with Escape and restores focus", async ({ page }) =
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(settings).toBeFocused();
+});
+
+
+test("composer radio controls retain their size on narrow screens", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 900 });
+  await page.goto("/compose");
+  const radio = page.getByRole("radio", { name: /飞书文档/ });
+  await expect(radio).toBeVisible();
+  const size = await radio.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { width: rect.width, height: rect.height };
+  });
+  expect(size.width).toBeLessThanOrEqual(24);
+  expect(size.height).toBeLessThanOrEqual(24);
+  await page.getByRole("radio", { name: /HTML 演示/ }).check();
+  await expect(page.getByRole("radio", { name: /HTML 演示/ })).toBeChecked();
 });
