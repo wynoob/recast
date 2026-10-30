@@ -39,6 +39,18 @@ const summary = {
 };
 
 describe("T02c shared contracts", () => {
+  it("defaults omitted usage summaries to null while keeping the summary schema strict", () => {
+    expect(AssetSummaryV2Schema.parse(summary).usageSummary).toBeNull();
+    expect(AssetSummaryV2Schema.parse({ ...summary, usageSummary: null }).usageSummary).toBeNull();
+    expect(
+      AssetSummaryV2Schema.parse({ ...summary, usageSummary: "用于门店介绍" }).usageSummary,
+    ).toBe("用于门店介绍");
+    expect(
+      AssetSummaryV2Schema.safeParse({ ...summary, usageSummary: 123 }).success,
+    ).toBe(false);
+    expect(AssetSummaryV2Schema.safeParse({ ...summary, unknownField: true }).success).toBe(false);
+  });
+
   it("requires origins, poster, sourceId, and sourceSuggestion", () => {
     expect(AssetSummaryV2Schema.safeParse(summary).success).toBe(true);
     expect(

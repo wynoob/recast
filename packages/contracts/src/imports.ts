@@ -490,6 +490,7 @@ export const AssetSummaryV2Schema = z.strictObject({
   title: z.string(),
   tags: z.array(z.string()),
   origins: AssetFieldOriginsSchema,
+  usageSummary: z.string().nullable().default(null),
   version: z.int().nonnegative(),
   mime: z.string(),
   bytes: z.int().nonnegative(),

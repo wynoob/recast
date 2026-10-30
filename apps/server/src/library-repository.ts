@@ -572,12 +572,17 @@ export class LibraryRepository {
         ? "available"
         : "missing";
     const probe = metadata.probe;
+    const sourceSuggestion = this.sourceSuggestionForAsset(row.id);
     return AssetSummaryV2Schema.parse({
       id: row.id,
       mediaKind: row.media_kind,
       title: human.title === "" ? (row.title ?? "未命名素材") : human.title,
       tags: human.tags,
       origins: human.origins,
+      usageSummary:
+        sourceSuggestion === null
+          ? null
+          : Array.from(sourceSuggestion.usageText).slice(0, 240).join(""),
       version: row.version ?? 0,
       mime: row.mime,
       bytes: row.bytes,

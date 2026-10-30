@@ -26,6 +26,13 @@
   --radius-small: 7px;
   --radius-mid: 12px;
   --font: "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+  --ink: var(--text);
+  --ink-soft: var(--text-soft);
+  --ink-muted: var(--muted);
+  --surface-strong: var(--surface-muted);
+  --surface-soft: var(--surface-muted);
+  --violet: var(--green);
+  --display: var(--font);
   --mono: "SFMono-Regular", "SF Mono", Menlo, monospace;
 }
 

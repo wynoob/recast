@@ -53,5 +53,5 @@ test("missing position count comes from occurrences rather than asset total", as
     json: { data: { items: [], total: 0, nextCursor: null, groupCounts: { mp4: 0, gif: 0, image: 0, markdownSources: 1, documentSources: 1, missingOccurrences: 5 } }, requestId: "missing-occurrence-count" },
   }));
   await page.goto("/assets");
-  await expect(page.getByText("0 个素材 · 1 份来源文档 · 5 个缺失位置", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("素材概况").getByText("5 个缺失位置", { exact: true })).toBeVisible();
 });

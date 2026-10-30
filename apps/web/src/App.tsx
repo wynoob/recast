@@ -27,7 +27,7 @@ export function Shell() {
   const crumb = breadcrumbFor(location.pathname);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${location.pathname === "/assets" ? " asset-shell" : ""}`}>
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">R</span>
